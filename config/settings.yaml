@@ -1,0 +1,58 @@
+# Engine settings. Secrets live in .env (see .env.example).
+# All thresholds here are research defaults and can be tuned freely; they are
+# not financial advice.
+
+liquidity:
+  min_price: 10.0                  # USD; reject anything below
+  min_avg_daily_dollar_volume: 25_000_000
+  min_option_open_interest: 500
+  min_option_volume: 100
+  max_option_bid_ask_spread_pct: 8.0
+
+# Composite score weights — must sum to 1.0 (spec §5).
+factor_weights:
+  relative_strength: 0.30
+  sector_strength: 0.20
+  structure: 0.20
+  trend: 0.15
+  volume_expansion: 0.10
+  catalyst: 0.05
+
+# Risk / management template (spec §8).
+risk:
+  trim1_gain_pct: 30.0
+  trim2_gain_pct: 60.0
+  move_stop_to_be_after_trim1: true
+  runner_trail: "8EMA"             # 8EMA | prior_candle_low | VWAP
+  forced_exit_before_event: true
+
+# Contract selection (spec §7).
+contract:
+  swing_dte_min: 14
+  swing_dte_max: 45
+  day_dte_min: 0
+  day_dte_max: 7
+  delta_target_min: 0.30
+  delta_target_max: 0.45
+  lotto_delta_max: 0.20            # lotto alerts use lower-delta wings
+  reject_if_spread_pct_above: 8.0
+
+# Regime / event filter (spec §3).
+regime:
+  vwap_lookback_min: 30
+  emas: [8, 20, 50]
+  block_if_event_within_hours: 4   # CPI, FOMC, mega-cap earnings, etc.
+  index_symbols: ["SPY", "QQQ", "IWM", "VIX"]
+
+# Storage
+storage:
+  database_url_env: "DATABASE_URL"
+
+# Alerting
+alerts:
+  dedupe_window_minutes: 30
+
+# Logging
+logging:
+  level_env: "LOG_LEVEL"
+  default_level: "INFO"

@@ -1,0 +1,61 @@
+# Starter universe. Tune freely; this is research-only.
+
+# Core liquid mega/large caps from S&P 500 + Nasdaq 100 across sectors.
+symbols:
+  - AAPL
+  - MSFT
+  - NVDA
+  - GOOGL
+  - META
+  - AMZN
+  - TSLA
+  - AVGO
+  - AMD
+  - NFLX
+  - CRM
+  - ORCL
+  - JPM
+  - BAC
+  - GS
+  - XOM
+  - CVX
+  - UNH
+  - LLY
+  - PFE
+  - HD
+  - WMT
+  - COST
+  - LMT
+  - RTX
+  - NOC
+  - MU
+  - SMCI
+  - PLTR
+  - COIN
+
+# Market / index proxies used by the regime engine.
+indices:
+  - SPY
+  - QQQ
+  - IWM
+  - VIX
+
+# Sector ETF map (per spec §4 — sector/theme ranking). Each sector ETF is the
+# proxy used to score that theme.
+sector_etfs:
+  tech_broad: XLK
+  semis: SMH
+  energy: XLE
+  financials: XLF
+  healthcare: XLV
+  industrials: XLI
+  defense: ITA
+  retail: XRT
+  discretionary: XLY
+  staples: XLP
+  utilities: XLU
+  real_estate: XLRE
+  materials: XLB
+  communication: XLC
+  china: FXI
+  bitcoin: IBIT
