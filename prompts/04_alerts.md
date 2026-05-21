@@ -5,6 +5,12 @@ Build the alerting layer for the Systematic Momentum Options Engine. Read
 follow-up). **Wave 0 is done and committed** — shared types and the `AlertSink`
 interface exist. Do not modify them.
 
+## Wave 0 reference (already on `main`)
+- Shared models + enums (`Signal`, `SignalEvent`, `ContractSuggestion`, etc.): `trading_engine.core.types`
+- `AlertSink` Protocol to implement (note the `dedupe_key`): `trading_engine.core.interfaces`
+- Config loader: `trading_engine.core.config`
+- Sample `Signal`/contract data for tests: `trading_engine.testing.synthetic` / `tests/conftest.py`
+
 ## Constraints
 - Only create/edit files in `trading_engine/alerts/` and tests in
   `tests/alerts/`. Do not touch `core/` or other modules.

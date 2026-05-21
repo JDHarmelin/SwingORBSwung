@@ -5,6 +5,12 @@ Engine. Read `claude_code_trading_engine_outline.md` §6 (all six setups) closel
 **Waves 0 and 1 are done and committed** — shared types/interfaces, data adapters
 (incl. mock), and the `features/` library exist. Do not modify them.
 
+## Wave 0/1 reference (already on `main`)
+- Shared models + enums (`Signal`, `SetupType`, `Direction`, etc.): `trading_engine.core.types`
+- Config loader: `trading_engine.core.config`
+- Mock providers + sample data: `trading_engine.data.mock_provider`, `trading_engine.testing.synthetic`, `tests/conftest.py`
+- Feature primitives to build on (EMA/VWAP/ATR, RS, compression, pivots, trendline break): under `trading_engine.features.*` (from Wave 1 — read that package for exact names; do NOT re-implement indicators)
+
 ## Constraints
 - Only create/edit files in `trading_engine/setups/` and tests in
   `tests/setups/`. Do not touch `core/`, `features/`, `scanners/`, etc.

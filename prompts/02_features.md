@@ -5,6 +5,12 @@ Read `claude_code_trading_engine_outline.md` §4–§6 for how these features fe
 ranking and setup detection. **Wave 0 is done and committed** — shared types and
 fixtures exist. Do not modify them.
 
+## Wave 0 reference (already on `main`)
+- Shared models + enums: `trading_engine.core.types`
+- Config loader: `trading_engine.core.config`
+- Sample-data generators (uptrend, pullback-to-8EMA, compression→breakout, breakdown, chop; daily + 5m), importable from runtime AND tests: `trading_engine.testing.synthetic`
+- Pytest fixtures wrapping them: `tests/conftest.py`
+
 ## Constraints
 - Only create/edit files in `trading_engine/features/` and tests in
   `tests/features/`. Do not touch `core/`, data, scanners, setups, etc.

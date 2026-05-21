@@ -23,6 +23,9 @@ env/
 *.sqlite
 *.sqlite3
 
+# Local market-data cache
+.cache/
+
 # Test / type caches
 .pytest_cache/
 .mypy_cache/
@@ -34,3 +37,6 @@ htmlcov/
 .idea/
 .vscode/
 .DS_Store
+
+# Claude Code worktrees
+.claude/worktrees/

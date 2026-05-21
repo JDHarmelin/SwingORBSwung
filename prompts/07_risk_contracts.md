@@ -6,6 +6,12 @@ Momentum Options Engine. Read `claude_code_trading_engine_outline.md` §7
 committed** — shared types/interfaces and the data adapters (incl. mock options
 provider) exist. Do not modify them.
 
+## Wave 0/1 reference (already on `main`)
+- Shared models + enums (`ContractSuggestion`, `TargetPlan`, `Signal`, `SignalEvent`, `RiskClass`): `trading_engine.core.types`
+- `OptionsDataProvider` Protocol (inject this): `trading_engine.core.interfaces`
+- Config loader (DTE/delta/spread/risk params): `trading_engine.core.config`
+- Mock options provider + sample chain (incl. a deliberately illiquid contract): `trading_engine.data.mock_provider`, `trading_engine.testing.synthetic`, `tests/conftest.py`
+
 ## Constraints
 - Only create/edit files in `trading_engine/risk/` and tests in `tests/risk/`.
   Do not touch `core/`, `data/`, `setups/`, etc.

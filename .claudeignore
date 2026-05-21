@@ -1,0 +1,16 @@
+# Keep autonomous exploration cheap — skip caches, venvs, build/test artifacts, DBs.
+.cache/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+*.db
+*.sqlite
+*.sqlite3
+.claude/worktrees/

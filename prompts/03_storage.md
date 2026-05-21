@@ -5,6 +5,12 @@ Build the persistence layer for the Systematic Momentum Options Engine. Read the
 is done and committed** — shared types and the `Repository` interface exist. Do
 not modify them.
 
+## Wave 0 reference (already on `main`)
+- Shared models + enums: `trading_engine.core.types`
+- `Repository` Protocol to implement: `trading_engine.core.interfaces`
+- Config loader (for `DATABASE_URL` etc.): `trading_engine.core.config`
+- Sample data for round-trip tests: `trading_engine.testing.synthetic` / `tests/conftest.py`
+
 ## Constraints
 - Only create/edit files in `trading_engine/storage/` and tests in
   `tests/storage/`. Do not touch `core/` or other modules.

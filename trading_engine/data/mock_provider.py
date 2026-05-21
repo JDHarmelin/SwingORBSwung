@@ -41,6 +41,11 @@ _SHAPES: dict[str, Any] = {
     "CHOP": choppy_series,
 }
 
+# Public list of the symbols the mock provider serves real shapes for. Useful as
+# a default scan universe when running on mock data (the real-ticker universe
+# would all fall back to choppy data and never trigger a setup).
+MOCK_SYMBOLS: list[str] = list(_SHAPES.keys())
+
 
 class MockMarketDataProvider:
     """Serves synthetic OHLCV. Symbol → shape mapping is intentionally simple
@@ -109,6 +114,7 @@ class MockEventsProvider:
 
 
 __all__ = [
+    "MOCK_SYMBOLS",
     "MockEventsProvider",
     "MockMarketDataProvider",
     "MockOptionsDataProvider",

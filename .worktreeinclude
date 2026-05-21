@@ -1,0 +1,3 @@
+# Untracked files copied into each new Claude Code worktree.
+# A worktree is a fresh checkout, so .env (gitignored) is not present by default.
+.env

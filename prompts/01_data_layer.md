@@ -5,6 +5,14 @@ Read `claude_code_trading_engine_outline.md` §1 (Data layer) and §2 (Universe
 builder) for context. **Wave 0 is already done and committed** — the shared
 types, interfaces, config loader, and fixtures exist. Do not modify them.
 
+## Wave 0 reference (already on `main`)
+- Shared models + enums: `trading_engine.core.types`
+- Interfaces (Protocols): `trading_engine.core.interfaces`
+- Config loader: `trading_engine.core.config` (reads `config/settings.yaml` + `config/universe.yaml`)
+- Sample-data generators, importable from runtime AND tests: `trading_engine.testing.synthetic`
+- Pytest fixtures wrapping them: `tests/conftest.py`
+- Existing mock providers: `trading_engine.data.mock_provider` → `Mock{Market,Options,Events}DataProvider`
+
 ## Constraints
 - You may ONLY create/edit files inside `trading_engine/data/` and add tests
   inside `tests/data/`. Do not touch `core/`, other modules, or shared fixtures.

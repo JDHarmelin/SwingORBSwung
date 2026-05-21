@@ -6,6 +6,14 @@ ranking), §5 (Stock ranking). **Waves 0 and 1 are done and committed** — shar
 types/interfaces, the data adapters (incl. mock provider), and the `features/`
 library all exist. Do not modify them.
 
+## Wave 0/1 reference (already on `main`)
+- Shared models + enums: `trading_engine.core.types`
+- Provider Protocols (inject these): `trading_engine.core.interfaces`
+- Config loader (factor weights, thresholds): `trading_engine.core.config`
+- Mock providers for tests: `trading_engine.data.mock_provider`
+- Sample data + fixtures: `trading_engine.testing.synthetic` / `tests/conftest.py`
+- Feature functions to consume: under `trading_engine.features.*` (from Wave 1 — read that package for exact names)
+
 ## Constraints
 - Only create/edit files in `trading_engine/scanners/` and tests in
   `tests/scanners/`. Do not touch `core/`, `data/`, `features/`, etc.
