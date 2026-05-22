@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -122,3 +122,50 @@ async def test_scores_round_trip(repo: SqlRepository) -> None:
     await repo.save_symbol_scores([sym])
     loaded = await repo.latest_symbol_scores()
     assert loaded[0].symbol == "UPTRD"
+
+
+@pytest.mark.asyncio
+async def test_loaded_timestamps_are_tz_aware(repo: SqlRepository) -> None:
+    """Regression: SQLite drops tzinfo on store, so the read path must re-attach
+    UTC. A naive timestamp here makes ``signal_service.is_stale`` raise
+    ``TypeError`` when it subtracts a tz-aware ``now``.
+    """
+    ts = datetime.now(tz=UTC)
+
+    candles = clean_uptrend_series("TST", Timeframe.D1, n=5).candles
+    await repo.upsert_candles(candles)
+    loaded_candles = await repo.get_candles(
+        "TST", Timeframe.D1, candles[0].timestamp, candles[-1].timestamp
+    )
+    assert loaded_candles[0].timestamp.tzinfo is not None
+
+    await repo.save_regime(
+        MarketRegime(timestamp=ts, regime=RegimeType.LONG_BIAS, confidence=0.8, notes=[])
+    )
+    regime = await repo.latest_regime()
+    assert regime is not None and regime.timestamp.tzinfo is not None
+
+    sig = Signal(
+        signal_id="tz-1",
+        timestamp=ts,
+        symbol="UPTRD",
+        setup_type=SetupType.A_BREAKOUT_CONTINUATION,
+        direction=Direction.LONG,
+        trigger_price=100.0,
+        stop_price=95.0,
+        target_plan=TargetPlan(),
+        rationale="test",
+        confidence=0.75,
+        status=SignalStatus.PENDING,
+    )
+    await repo.save_signal(sig)
+    loaded_sig = await repo.get_signal("tz-1")
+    assert loaded_sig is not None and loaded_sig.timestamp.tzinfo is not None
+    # The exact comparison that previously crashed must now work.
+    assert datetime.now(tz=UTC) - loaded_sig.timestamp >= timedelta(0)
+
+    await repo.append_signal_event(
+        SignalEvent(signal_id="tz-1", event_timestamp=ts, event_type="trim1", event_payload={})
+    )
+    events = await repo.list_signal_events("tz-1")
+    assert events[0].event_timestamp.tzinfo is not None

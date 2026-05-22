@@ -52,7 +52,7 @@ def row_to_candle(r: CandleRow) -> Candle:
     return Candle(
         symbol=r.symbol,
         timeframe=Timeframe(r.timeframe),
-        timestamp=r.timestamp,
+        timestamp=_dt(r.timestamp),
         open=r.open,
         high=r.high,
         low=r.low,
@@ -72,7 +72,7 @@ def regime_to_row(r: MarketRegime) -> MarketRegimeRow:
 
 def row_to_regime(r: MarketRegimeRow) -> MarketRegime:
     return MarketRegime(
-        timestamp=r.timestamp,
+        timestamp=_dt(r.timestamp),
         regime=RegimeType(r.regime),
         confidence=r.confidence,
         notes=json.loads(r.notes_json),
@@ -93,7 +93,7 @@ def sector_to_row(s: SectorScore) -> SectorScoreRow:
 
 def row_to_sector(r: SectorScoreRow) -> SectorScore:
     return SectorScore(
-        timestamp=r.timestamp,
+        timestamp=_dt(r.timestamp),
         sector=r.sector,
         rs_1d=r.rs_1d,
         rs_5d=r.rs_5d,
@@ -123,7 +123,7 @@ def symbol_to_row(s: SymbolScore) -> SymbolScoreRow:
 
 def row_to_symbol(r: SymbolScoreRow) -> SymbolScore:
     return SymbolScore(
-        timestamp=r.timestamp,
+        timestamp=_dt(r.timestamp),
         symbol=r.symbol,
         direction_bucket=Direction(r.direction_bucket),
         rs_score=r.rs_score,
@@ -160,7 +160,7 @@ def row_to_signal(r: SignalRow) -> Signal:
     contract = ContractSuggestion.model_validate_json(r.contract_json) if r.contract_json else None
     return Signal(
         signal_id=r.signal_id,
-        timestamp=r.timestamp,
+        timestamp=_dt(r.timestamp),
         symbol=r.symbol,
         setup_type=SetupType(r.setup_type),
         direction=Direction(r.direction),
@@ -188,7 +188,7 @@ def event_to_row(e: SignalEvent) -> SignalEventRow:
 def row_to_event(r: SignalEventRow) -> SignalEvent:
     return SignalEvent(
         signal_id=r.signal_id,
-        event_timestamp=r.event_timestamp,
+        event_timestamp=_dt(r.event_timestamp),
         event_type=r.event_type,
         event_payload=json.loads(r.event_payload_json),
     )
