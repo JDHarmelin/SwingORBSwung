@@ -72,9 +72,7 @@ async def rank_stocks(
             long_scores.append(score)
         if composite <= 0.45 or rs.vs_spy_5d < -1:
             short_scores.append(
-                SymbolScore(
-                    **{**score.model_dump(), "direction_bucket": Direction.SHORT}
-                )
+                SymbolScore(**{**score.model_dump(), "direction_bucket": Direction.SHORT})
             )
 
     long_scores.sort(key=lambda s: s.composite_score, reverse=True)

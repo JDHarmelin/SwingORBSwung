@@ -25,8 +25,17 @@ class Scheduler:
         self._running = True
         logger.info("scheduler started interval=%ss", self._interval)
         while self._running:
-            ids = await self._svc.scan_once(symbols)
-            logger.info("scan complete signals=%s", len(ids))
+            candidates = await self._svc.scan_once(symbols, alert_candidates=False)
+            expired = await self._svc.expire_stale_candidates()
+            confirmed = await self._svc.confirm_and_alert()
+            tracked = await self._svc.track_outcomes()
+            logger.info(
+                "tick candidates=%s expired=%s confirmed=%s outcomes_logged=%s",
+                len(candidates),
+                len(expired),
+                len(confirmed),
+                len(tracked),
+            )
             await asyncio.sleep(self._interval)
 
     def stop(self) -> None:

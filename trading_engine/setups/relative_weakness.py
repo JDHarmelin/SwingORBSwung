@@ -19,7 +19,11 @@ class RelativeWeaknessSetup:
         if not daily:
             return []
         df = daily.to_dataframe()
-        support = float(df["low"].iloc[-15:-3].min()) if len(df) > 15 else float(df["low"].iloc[:-1].min())
+        support = (
+            float(df["low"].iloc[-15:-3].min())
+            if len(df) > 15
+            else float(df["low"].iloc[:-1].min())
+        )
         close = float(df["close"].iloc[-1])
         if close > support * 1.002:
             return []

@@ -91,6 +91,12 @@ class AlertsConfig(_Cfg):
     dedupe_window_minutes: int = 30
 
 
+class ExecutionConfig(_Cfg):
+    """Execution-only layer knobs (candidate lifecycle)."""
+
+    candidate_ttl_hours: int = 24
+
+
 class LoggingConfig(_Cfg):
     level_env: str = "LOG_LEVEL"
     default_level: str = "INFO"
@@ -104,6 +110,7 @@ class Settings(_Cfg):
     regime: RegimeConfig
     storage: StorageConfig = Field(default_factory=StorageConfig)
     alerts: AlertsConfig = Field(default_factory=AlertsConfig)
+    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
 
@@ -190,6 +197,7 @@ __all__ = [
     "AlertsConfig",
     "AppConfig",
     "ContractConfig",
+    "ExecutionConfig",
     "FactorWeights",
     "LiquidityConfig",
     "LoggingConfig",
