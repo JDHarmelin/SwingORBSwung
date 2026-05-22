@@ -111,9 +111,9 @@ async def test_candles_round_trip(repo: Repository) -> None:
     c2 = _make_candle(datetime(2026, 5, 20, tzinfo=UTC))
     await repo.upsert_candles([c1, c2])
     got = await repo.get_candles("UPTRD", Timeframe.D1, _AS_OF, datetime(2026, 5, 20, tzinfo=UTC))
-    # SQLite drops tzinfo from naive DateTime columns; compare on naive UTC.
-    def _naive(d): return d.replace(tzinfo=None)
-    assert [_naive(c.timestamp) for c in got] == [_naive(c1.timestamp), _naive(c2.timestamp)]
+    # SqlRepository normalises naive timestamps back to UTC-aware on read,
+    # so the round-trip is lossless for both repo implementations.
+    assert [c.timestamp for c in got] == [c1.timestamp, c2.timestamp]
 
 
 @pytest.mark.asyncio

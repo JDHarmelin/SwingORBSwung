@@ -91,6 +91,14 @@ class AlertsConfig(_Cfg):
     dedupe_window_minutes: int = 30
 
 
+class ExecutionConfig(_Cfg):
+    """Execution-only alerting controls (spec §6/§8)."""
+
+    candidate_ttl_hours: int = 24
+    paper_rr: float = 2.0
+    paper_track_bars: int = 30
+
+
 class LoggingConfig(_Cfg):
     level_env: str = "LOG_LEVEL"
     default_level: str = "INFO"
@@ -104,6 +112,7 @@ class Settings(_Cfg):
     regime: RegimeConfig
     storage: StorageConfig = Field(default_factory=StorageConfig)
     alerts: AlertsConfig = Field(default_factory=AlertsConfig)
+    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
 
@@ -158,6 +167,31 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
+def _load_dotenv(path: Path) -> None:
+    """Populate ``os.environ`` from a ``.env`` file, but do not overwrite
+    variables already set in the real environment (so an explicit shell
+    export still wins, which matters for CI).
+
+    Minimal KEY=VALUE parser — strips matching quotes, ignores blank lines and
+    ``#`` comments. We deliberately don't pull in ``python-dotenv`` for this.
+    """
+    if not path.is_file():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if (value.startswith('"') and value.endswith('"')) or (
+            value.startswith("'") and value.endswith("'")
+        ):
+            value = value[1:-1]
+        # Don't clobber existing exports — explicit env wins.
+        os.environ.setdefault(key, value)
+
+
 def _load_secrets(database_url_env: str) -> Secrets:
     return Secrets(
         polygon_api_key=os.environ.get("POLYGON_API_KEY") or None,
@@ -184,6 +218,9 @@ def load_universe(path: Path | None = None) -> Universe:
 
 def load_app_config(config_dir: Path | None = None) -> AppConfig:
     cdir = config_dir or default_config_dir()
+    # Load the project-root .env (one level above ``config/``) so secrets live
+    # with the project, not in the user shell. Explicit shell exports still win.
+    _load_dotenv(cdir.parent / ".env")
     settings = load_settings(cdir / "settings.yaml")
     universe = load_universe(cdir / "universe.yaml")
     secrets = _load_secrets(settings.storage.database_url_env)
@@ -194,6 +231,7 @@ __all__ = [
     "AlertsConfig",
     "AppConfig",
     "ContractConfig",
+    "ExecutionConfig",
     "FactorWeights",
     "LiquidityConfig",
     "LoggingConfig",

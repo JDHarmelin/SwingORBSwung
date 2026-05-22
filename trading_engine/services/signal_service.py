@@ -1,17 +1,27 @@
-"""End-to-end signal pipeline (spec §6 → §10).
+"""End-to-end signal pipeline (spec §6 → §10) — execution-only.
 
-regime → sector rank → stock rank → setup detection → contract selection →
-risk classification → persistence → alert dispatch.
+Two-phase flow:
 
-Pure async orchestration; all I/O goes through the provider, repo, and alert
-sink protocols so it can be wired against mocks or live infra.
+1. ``run_pipeline()`` — generates and **persists candidates silently** (no
+   Telegram). Idempotent: deterministic signal_ids mean re-scans upsert.
+2. ``confirm_and_alert(gate)`` — loops PENDING candidates, runs the
+   ``ConfirmationGate``, and fires Telegram only for confirmed ones (flipping
+   status to TRIGGERED).
+
+Lifecycle helpers:
+- ``expire_stale_candidates()`` — PENDINGs older than the configured TTL move
+  to EXPIRED_RISK so the backlog can't grow forever.
+- ``track_outcomes()`` — simulates each candidate forward on its underlying
+  and records a ``paper_outcome`` event (idempotent). Builds the learning log.
+
+All I/O goes through the provider, repo, and alert sink protocols.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from trading_engine.alerts.formatter import dedupe_key, format_signal
 from trading_engine.core.config import Settings, Universe
@@ -27,6 +37,8 @@ from trading_engine.core.types import (
     OHLCVSeries,
     SectorScore,
     Signal,
+    SignalEvent,
+    SignalStatus,
     SymbolScore,
     Timeframe,
 )
@@ -40,10 +52,19 @@ from trading_engine.scanners.market_regime import (
 )
 from trading_engine.scanners.stock_ranker import SymbolRankInputs, rank_symbols
 from trading_engine.scanners.universe_builder import build_universe, tradable_symbols
+from trading_engine.services.confirmation import ConfirmationGate
+from trading_engine.services.paper_tracker import (
+    record_outcome,
+    simulate_outcome,
+)
 from trading_engine.setups import EQUITY_DETECTORS, INDEX_DETECTORS
 from trading_engine.setups.base import SetupContext
 
 log = logging.getLogger(__name__)
+
+
+def _aware(dt: datetime) -> datetime:
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
 @dataclass
@@ -53,7 +74,7 @@ class PipelineResult:
     tradable: list[str] = field(default_factory=list)
     sector_scores: list[SectorScore] = field(default_factory=list)
     symbol_scores: list[SymbolScore] = field(default_factory=list)
-    signals: list[Signal] = field(default_factory=list)
+    candidates: list[Signal] = field(default_factory=list)
 
 
 class SignalService:
@@ -79,6 +100,21 @@ class SignalService:
         self.alerts = alerts
 
     # ------------------------------------------------------------------
+    # TTL helpers (public — MCP bridge / tests poke them)
+    # ------------------------------------------------------------------
+    @property
+    def candidate_ttl_hours(self) -> int:
+        return self.settings.execution.candidate_ttl_hours
+
+    def _candidate_ttl(self) -> timedelta:
+        return timedelta(hours=self.candidate_ttl_hours)
+
+    def is_stale(self, signal: Signal, *, now: datetime | None = None) -> bool:
+        """True if a candidate is past its TTL."""
+        now = now or datetime.now(tz=UTC)
+        return (now - _aware(signal.timestamp)) > self._candidate_ttl()
+
+    # ------------------------------------------------------------------
     # Data fetch
     # ------------------------------------------------------------------
     async def _fetch_daily(
@@ -101,9 +137,10 @@ class SignalService:
         return out
 
     # ------------------------------------------------------------------
-    # Pipeline
+    # Phase 1: generate candidates silently
     # ------------------------------------------------------------------
     async def run_pipeline(self, as_of: datetime) -> PipelineResult:
+        """Detect candidates and persist them; **does not alert.**"""
         result = PipelineResult(as_of=as_of)
         cfg = self.settings
 
@@ -168,7 +205,7 @@ class SignalService:
         await self.repo.save_symbol_scores(symbol_scores)
         result.symbol_scores = symbol_scores
 
-        # 5. Setup detection on the ranked candidates.
+        # 5. Setup detection — equity bucket.
         intraday_candidates = await self._fetch_intraday(result.tradable, as_of)
         scores_by_symbol = {s.symbol: s for s in symbol_scores}
         for score in symbol_scores:
@@ -189,10 +226,9 @@ class SignalService:
                 target_plan=build_target_plan(cfg.risk),
             )
             for detector in EQUITY_DETECTORS:
-                signals = detector.detect(ctx)
-                for sig in signals:
-                    await self._finalise_and_dispatch(sig, day_trade=False)
-                    result.signals.append(sig)
+                for sig in detector.detect(ctx):
+                    final = await self._persist_candidate(sig, day_trade=False)
+                    result.candidates.append(final)
 
         # 6. Index tactical setups.
         for sym in cfg.regime.index_symbols:
@@ -211,19 +247,15 @@ class SignalService:
             )
             for detector in INDEX_DETECTORS:
                 for sig in detector.detect(ctx):
-                    await self._finalise_and_dispatch(sig, day_trade=True)
-                    result.signals.append(sig)
+                    final = await self._persist_candidate(sig, day_trade=True)
+                    result.candidates.append(final)
 
         return result
 
-    # ------------------------------------------------------------------
-    # Per-signal finalisation
-    # ------------------------------------------------------------------
-    async def _finalise_and_dispatch(self, signal: Signal, *, day_trade: bool) -> None:
+    async def _persist_candidate(self, signal: Signal, *, day_trade: bool) -> Signal:
+        """Pick a contract, classify risk, save — but don't alert (yet)."""
         cfg = self.settings
-        # Risk classification.
         risk_class = classify_risk(signal.confidence, day_trade=day_trade)
-        # Contract selection (skip on no-options index, which still has chains).
         chain = await self.options_data.get_option_chain(signal.symbol)
         contract = select_contract(
             chain,
@@ -234,11 +266,110 @@ class SignalService:
             risk_class=risk_class,
             day_trade=day_trade,
         )
-        final = signal.model_copy(
-            update={"contract": contract, "risk_class": risk_class}
-        )
+        final = signal.model_copy(update={"contract": contract, "risk_class": risk_class})
         await self.repo.save_signal(final)
-        await self.alerts.send(format_signal(final), dedupe_key=dedupe_key(final))
+        return final
+
+    # ------------------------------------------------------------------
+    # Phase 2: confirm + alert
+    # ------------------------------------------------------------------
+    async def confirm_and_alert(
+        self, gate: ConfirmationGate, *, now: datetime | None = None
+    ) -> list[Signal]:
+        """Run the gate over open PENDING candidates; alert + flip status for
+        the ones the gate confirms. Stale candidates are skipped (and should be
+        cleaned up via ``expire_stale_candidates`` on the next tick).
+
+        ``now`` is exposed for deterministic tests; production callers omit it.
+        """
+        alerted: list[Signal] = []
+        now = now or datetime.now(tz=UTC)
+        for signal in await self.repo.open_signals():
+            if signal.status is not SignalStatus.PENDING:
+                continue
+            if self.is_stale(signal, now=now):
+                continue
+            decision = await gate.assess(signal)
+            if not decision.confirmed:
+                continue
+            triggered = signal.model_copy(
+                update={
+                    "status": SignalStatus.TRIGGERED,
+                    "confidence": decision.confidence,
+                    "reason_codes": [*signal.reason_codes, *decision.reason_codes],
+                }
+            )
+            await self.repo.save_signal(triggered)
+            await self.repo.append_signal_event(
+                SignalEvent(
+                    signal_id=triggered.signal_id,
+                    event_timestamp=now,
+                    event_type="triggered",
+                    event_payload={"trigger": triggered.trigger_price},
+                )
+            )
+            await self.alerts.send(
+                format_signal(triggered), dedupe_key=dedupe_key(triggered)
+            )
+            alerted.append(triggered)
+        return alerted
+
+    # ------------------------------------------------------------------
+    # Lifecycle hygiene
+    # ------------------------------------------------------------------
+    async def expire_stale_candidates(self) -> list[str]:
+        """Move PENDING candidates older than TTL to EXPIRED_RISK. Returns ids."""
+        now = datetime.now(tz=UTC)
+        expired: list[str] = []
+        for signal in await self.repo.open_signals():
+            if signal.status is not SignalStatus.PENDING or not self.is_stale(signal, now=now):
+                continue
+            age_h = (now - _aware(signal.timestamp)).total_seconds() / 3600.0
+            await self.repo.save_signal(
+                signal.model_copy(update={"status": SignalStatus.EXPIRED_RISK})
+            )
+            await self.repo.append_signal_event(
+                SignalEvent(
+                    signal_id=signal.signal_id,
+                    event_timestamp=now,
+                    event_type="expired_candidate",
+                    event_payload={
+                        "symbol": signal.symbol,
+                        "age_hours": round(age_h, 2),
+                        "ttl_hours": self.candidate_ttl_hours,
+                    },
+                )
+            )
+            expired.append(signal.signal_id)
+        return expired
+
+    async def track_outcomes(self, as_of: datetime) -> list[str]:
+        """Simulate each candidate forward on its underlying; record a
+        ``paper_outcome`` event the first time it has terminal information.
+        Idempotent: an existing paper_outcome event short-circuits."""
+        recorded: list[str] = []
+        # Recent intraday window for the simulation. Daily would also work but
+        # 5m gives finer-grained trigger detection.
+        for signal in await self.repo.open_signals():
+            # Already recorded?
+            events = await self.repo.list_signal_events(signal.signal_id)
+            if any(e.event_type == "paper_outcome" for e in events):
+                continue
+            series = await self.market_data.get_ohlcv(
+                signal.symbol,
+                Timeframe.M5,
+                _aware(signal.timestamp),
+                as_of,
+            )
+            outcome = simulate_outcome(
+                signal, series, rr=self.settings.execution.paper_rr
+            )
+            # Only record terminal outcomes ('open' stays open until resolved).
+            if outcome.result == "open":
+                continue
+            if await record_outcome(self.repo, signal, outcome, at=as_of):
+                recorded.append(signal.signal_id)
+        return recorded
 
 
 __all__ = ["PipelineResult", "SignalService"]

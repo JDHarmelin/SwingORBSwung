@@ -1,15 +1,19 @@
 """CLI entrypoint.
 
 Subcommands:
-- ``regime``: classify the current regime and print it.
-- ``rank``: print top long/short candidate scores.
-- ``scan``: full pipeline once; emit alerts to the configured sink.
-- ``run``: pipeline + management loop.
+- ``regime``     — classify the current regime and print its notes.
+- ``rank``       — print top long/short candidate scores.
+- ``scan-once``  — generate and persist candidates silently (no alerts).
+- ``confirm``    — run the confirmation gate over open candidates; alert only
+                    the confirmed ones.
+- ``run``        — full execution-only loop: expire → generate → confirm + alert
+                    → track outcomes → management tick.
 
-Provider/sink wiring is controlled by ``--provider`` and ``--sink``:
-- ``--provider mock`` uses synthetic fixtures (no API keys required).
-- ``--sink console`` prints alerts to stdout; ``telegram`` posts to the bot
-  configured via ``TELEGRAM_BOT_TOKEN`` / ``TELEGRAM_CHAT_ID``.
+Provider/sink wiring via ``--provider`` and ``--sink``. ``--provider mock`` uses
+synthetic fixtures (no API keys); ``--sink telegram`` requires
+``TELEGRAM_BOT_TOKEN`` / ``TELEGRAM_CHAT_ID`` (from the project ``.env``,
+auto-loaded). ``--gate`` selects the confirmation gate (``price_cross`` for
+mechanical trigger detection, ``always_on`` for tests).
 """
 
 from __future__ import annotations
@@ -40,8 +44,13 @@ from trading_engine.data.polygon import (
     PolygonMarketDataProvider,
     PolygonOptionsDataProvider,
 )
+from trading_engine.services.confirmation import (
+    AlwaysOnGate,
+    ConfirmationGate,
+    PriceCrossConfirmationGate,
+)
 from trading_engine.services.management_service import ManagementService
-from trading_engine.services.scheduler import run_loop, run_once
+from trading_engine.services.scheduler import run_loop, run_tick
 from trading_engine.services.signal_service import SignalService
 from trading_engine.storage import InMemoryRepository, SqlRepository
 
@@ -92,11 +101,22 @@ def _make_repo(kind: Literal["memory", "sqlite"], cfg: AppConfig) -> Repository:
     raise ValueError(f"unknown repo kind: {kind}")
 
 
-def _build_service(args: argparse.Namespace) -> tuple[SignalService, ManagementService, AlertSink]:
+def _make_gate(
+    kind: Literal["price_cross", "always_on"], market: MarketDataProvider
+) -> ConfirmationGate:
+    if kind == "always_on":
+        return AlwaysOnGate()
+    return PriceCrossConfirmationGate(market)
+
+
+def _build_service(
+    args: argparse.Namespace,
+) -> tuple[SignalService, ManagementService, ConfirmationGate, AlertSink]:
     cfg = load_app_config()
     providers = _make_providers(args.provider, cfg)
     sink = _make_sink(args.sink, cfg)
     repo = _make_repo(args.repo, cfg)
+    gate = _make_gate(getattr(args, "gate", "price_cross"), providers[0])
     signal_service = SignalService(
         settings=cfg.settings,
         universe=cfg.universe,
@@ -107,7 +127,7 @@ def _build_service(args: argparse.Namespace) -> tuple[SignalService, ManagementS
         alerts=sink,
     )
     management_service = ManagementService(options_data=providers[1], repo=repo, alerts=sink)
-    return signal_service, management_service, sink
+    return signal_service, management_service, gate, sink
 
 
 # ---------------------------------------------------------------------------
@@ -116,8 +136,7 @@ def _build_service(args: argparse.Namespace) -> tuple[SignalService, ManagementS
 
 
 async def cmd_regime(args: argparse.Namespace) -> int:
-    signal_service, _mgmt, _sink = _build_service(args)
-    # Run only the regime portion by invoking the pipeline and reporting result.
+    signal_service, _mgmt, _gate, _sink = _build_service(args)
     result = await signal_service.run_pipeline(datetime.now(tz=UTC))
     print("Regime notes:")
     for note in result.regime_notes:
@@ -126,7 +145,7 @@ async def cmd_regime(args: argparse.Namespace) -> int:
 
 
 async def cmd_rank(args: argparse.Namespace) -> int:
-    signal_service, _mgmt, _sink = _build_service(args)
+    signal_service, _mgmt, _gate, _sink = _build_service(args)
     result = await signal_service.run_pipeline(datetime.now(tz=UTC))
     longs = [s for s in result.symbol_scores if s.direction_bucket.value == "long"]
     shorts = [s for s in result.symbol_scores if s.direction_bucket.value == "short"]
@@ -139,18 +158,33 @@ async def cmd_rank(args: argparse.Namespace) -> int:
     return 0
 
 
-async def cmd_scan(args: argparse.Namespace) -> int:
-    signal_service, mgmt, _sink = _build_service(args)
-    emitted = await run_once(signal_service, mgmt)
-    print(f"Emitted {emitted} signal(s) — see configured sink for messages.")
+async def cmd_scan_once(args: argparse.Namespace) -> int:
+    """Generate candidates silently — no alerts. Run ``confirm`` to fire."""
+    signal_service, _mgmt, _gate, _sink = _build_service(args)
+    result = await signal_service.run_pipeline(datetime.now(tz=UTC))
+    print(f"Persisted {len(result.candidates)} candidate(s). No alerts dispatched (use `confirm`).")
+    for c in result.candidates[:10]:
+        print(f"  {c.symbol:<6} {c.setup_type.value:<26} {c.direction.value:<6} trigger={c.trigger_price:.2f}")
+    return 0
+
+
+async def cmd_confirm(args: argparse.Namespace) -> int:
+    """Run the gate over open candidates and alert the confirmed ones."""
+    signal_service, _mgmt, gate, _sink = _build_service(args)
+    alerted = await signal_service.confirm_and_alert(gate)
+    print(f"Confirmed + alerted {len(alerted)} signal(s).")
     return 0
 
 
 async def cmd_run(args: argparse.Namespace) -> int:
-    signal_service, mgmt, _sink = _build_service(args)
+    signal_service, mgmt, gate, _sink = _build_service(args)
+    if args.iterations is not None and args.iterations <= 1:
+        await run_tick(signal_service, mgmt, gate)
+        return 0
     await run_loop(
         signal_service,
         mgmt,
+        gate,
         interval_seconds=args.interval,
         iterations=args.iterations,
     )
@@ -166,19 +200,25 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--provider", choices=["mock", "polygon"], default="mock")
     p.add_argument("--sink", choices=["console", "memory", "telegram"], default="console")
     p.add_argument("--repo", choices=["memory", "sqlite"], default="memory")
+    p.add_argument(
+        "--gate",
+        choices=["price_cross", "always_on"],
+        default="price_cross",
+        help="confirmation gate (always_on confirms every candidate — testing)",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="trading-engine")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    for name in ("regime", "rank", "scan"):
+    for name in ("regime", "rank", "scan-once", "confirm"):
         p = sub.add_parser(name, help=f"{name} subcommand")
         _add_common(p)
 
-    p_run = sub.add_parser("run", help="run pipeline + management loop")
+    p_run = sub.add_parser("run", help="execution-only loop (expire → scan → confirm → track)")
     _add_common(p_run)
-    p_run.add_argument("--interval", type=int, default=300, help="seconds between mgmt ticks")
+    p_run.add_argument("--interval", type=int, default=300, help="seconds between ticks")
     p_run.add_argument("--iterations", type=int, default=None, help="cap loop iterations (for tests)")
 
     return parser
@@ -191,7 +231,8 @@ def main(argv: list[str] | None = None) -> int:
     coro = {
         "regime": cmd_regime,
         "rank": cmd_rank,
-        "scan": cmd_scan,
+        "scan-once": cmd_scan_once,
+        "confirm": cmd_confirm,
         "run": cmd_run,
     }[args.cmd](args)
     return asyncio.run(coro)

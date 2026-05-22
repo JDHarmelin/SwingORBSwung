@@ -24,6 +24,7 @@ from trading_engine.data.mock_provider import (
     MockMarketDataProvider,
     MockOptionsDataProvider,
 )
+from trading_engine.services.confirmation import AlwaysOnGate
 from trading_engine.services.management_service import ManagementService
 from trading_engine.services.signal_service import SignalService
 from trading_engine.storage import InMemoryRepository
@@ -94,48 +95,72 @@ def services():
 
 
 @pytest.mark.asyncio
-async def test_pipeline_emits_signals_and_dispatches(services) -> None:
+async def test_pipeline_persists_candidates_without_alerting(services) -> None:
     signal_service, _mgmt, repo, sink = services
     result = await signal_service.run_pipeline(_AS_OF)
 
-    # Regime persisted; pipeline ran past the gate.
-    latest_regime = await repo.latest_regime()
-    assert latest_regime is not None
+    # Regime + scores persisted.
+    assert await repo.latest_regime() is not None
+    assert await repo.latest_sector_scores()
+    assert await repo.latest_symbol_scores()
 
-    # Sector scores stored.
-    sectors = await repo.latest_sector_scores()
-    assert sectors  # at least one sector scored
-
-    # Symbol scores stored, longs and shorts both populated.
-    syms = await repo.latest_symbol_scores()
-    assert syms
-
-    # At least one signal emitted, persisted, and dispatched.
-    assert len(result.signals) >= 1
-    persisted = await repo.get_signal(result.signals[0].signal_id)
+    # Candidates persisted but no alert dispatched (execution-only contract).
+    assert len(result.candidates) >= 1
+    persisted = await repo.get_signal(result.candidates[0].signal_id)
     assert persisted is not None
-    assert len(sink.messages) == len(result.signals)
-    # Each message contains the expected setup tag.
-    for msg in sink.messages:
-        assert "SETUP:" in msg
-        assert "ENTRY:" in msg
+    assert sink.messages == []
 
 
 @pytest.mark.asyncio
-async def test_no_trade_regime_emits_no_signals(services) -> None:
+async def test_confirm_and_alert_fires_only_after_gate(services) -> None:
+    signal_service, _mgmt, repo, sink = services
+    result = await signal_service.run_pipeline(_AS_OF)
+    assert sink.messages == []  # silent generation phase
+
+    # AlwaysOnGate confirms every candidate → all should alert exactly once.
+    # Pin ``now`` to _AS_OF so candidates aren't flagged stale by wall-clock.
+    alerted = await signal_service.confirm_and_alert(AlwaysOnGate(), now=_AS_OF)
+    assert len(alerted) == len(result.candidates)
+    assert len(sink.messages) == len(result.candidates)
+
+    # All triggered signals were transitioned in storage.
+    for a in alerted:
+        s = await repo.get_signal(a.signal_id)
+        assert s is not None and s.status.value == "triggered"
+
+    # Idempotent: re-running finds no more PENDING.
+    again = await signal_service.confirm_and_alert(AlwaysOnGate(), now=_AS_OF)
+    assert again == []
+
+
+@pytest.mark.asyncio
+async def test_expire_stale_candidates(services) -> None:
+    signal_service, _mgmt, repo, _sink = services
+    await signal_service.run_pipeline(_AS_OF)
+
+    # Force the TTL to 0 hours so every candidate is instantly stale.
+    signal_service.settings = signal_service.settings.model_copy(
+        update={
+            "execution": signal_service.settings.execution.model_copy(
+                update={"candidate_ttl_hours": 0}
+            )
+        }
+    )
+    expired_ids = await signal_service.expire_stale_candidates()
+    assert expired_ids
+    for sid in expired_ids:
+        sig = await repo.get_signal(sid)
+        assert sig is not None and sig.status.value == "expired_risk"
+
+
+@pytest.mark.asyncio
+async def test_no_signals_when_universe_empty(services) -> None:
     signal_service, _mgmt, _repo, sink = services
-    # Force no-trade by passing an event in the next hour: mutate events.
-    signal_service.events = MockEventsProvider()  # default no events
-    # Override settings to make the event window aggressive — easier: directly
-    # set the regime by mocking classify. Simplest: rely on the service's
-    # ``block_if_event_within_hours`` path is bypassed without events. Skip
-    # this branch and instead patch settings to require an impossibly tight
-    # liquidity: yields tradable=[] so no signals.
     signal_service.settings = signal_service.settings.model_copy(
         update={"liquidity": signal_service.settings.liquidity.model_copy(
             update={"min_avg_daily_dollar_volume": 1e15}
         )}
     )
     result = await signal_service.run_pipeline(_AS_OF)
-    assert result.signals == []
+    assert result.candidates == []
     assert sink.messages == []

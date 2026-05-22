@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 from sqlalchemy import create_engine, select
@@ -42,6 +42,14 @@ from trading_engine.storage.models import (
 _R = TypeVar("_R")
 
 
+def _aware(dt: datetime | None) -> datetime | None:
+    """SQLite DateTime drops tzinfo on store, so naive UTC comes back on read.
+    Normalise to tz-aware UTC so downstream tz arithmetic doesn't crash."""
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
 # ---------------------------------------------------------------------------
 # Row ↔ domain conversion
 # ---------------------------------------------------------------------------
@@ -64,7 +72,7 @@ def _row_to_candle(r: CandleRow) -> Candle:
     return Candle(
         symbol=r.symbol,
         timeframe=Timeframe(r.timeframe),
-        timestamp=r.timestamp,
+        timestamp=_aware(r.timestamp) or r.timestamp,
         open=r.open,
         high=r.high,
         low=r.low,
@@ -104,7 +112,7 @@ def _row_to_signal(r: SignalRow) -> Signal:
 
     return Signal(
         signal_id=r.signal_id,
-        timestamp=r.timestamp,
+        timestamp=_aware(r.timestamp) or r.timestamp,
         symbol=r.symbol,
         setup_type=SetupType(r.setup_type),
         direction=Direction(r.direction),
@@ -215,7 +223,7 @@ class SqlRepository:
         if row is None:
             return None
         return MarketRegime(
-            timestamp=row.timestamp,
+            timestamp=_aware(row.timestamp) or row.timestamp,
             regime=RegimeType(row.regime),
             confidence=row.confidence,
             notes=list(row.notes_json or []),
@@ -262,7 +270,7 @@ class SqlRepository:
             )
         return [
             SectorScore(
-                timestamp=r.timestamp,
+                timestamp=_aware(r.timestamp) or r.timestamp,
                 sector=r.sector,
                 rs_1d=r.rs_1d,
                 rs_5d=r.rs_5d,
@@ -320,7 +328,7 @@ class SqlRepository:
             )
         return [
             SymbolScore(
-                timestamp=r.timestamp,
+                timestamp=_aware(r.timestamp) or r.timestamp,
                 symbol=r.symbol,
                 direction_bucket=Direction(r.direction_bucket),
                 rs_score=r.rs_score,
@@ -415,7 +423,7 @@ class SqlRepository:
         return [
             SignalEvent(
                 signal_id=r.signal_id,
-                event_timestamp=r.event_timestamp,
+                event_timestamp=_aware(r.event_timestamp) or r.event_timestamp,
                 event_type=r.event_type,
                 event_payload=dict(r.event_payload_json or {}),
             )
