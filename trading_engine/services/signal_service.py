@@ -134,6 +134,7 @@ class SignalService:
             return result
 
         # 3. Sector ranking (SPY as benchmark).
+        sector_composite_by_name: dict[str, float] = {}
         spy = index_daily.get("SPY")
         if spy is not None:
             sector_series = await self._fetch_daily(list(self.universe.sector_etfs.values()), as_of)
@@ -144,6 +145,7 @@ class SignalService:
             sector_scores = rank_sectors(sector_input, spy, as_of=as_of)
             await self.repo.save_sector_scores(sector_scores)
             result.sector_scores = sector_scores
+            sector_composite_by_name = {s.sector: s.composite_score for s in sector_scores}
 
         # 4. Stock ranking — RS vs SPY/QQQ.
         benchmarks_daily = {s: index_daily[s] for s in ("SPY", "QQQ") if s in index_daily}
@@ -155,7 +157,9 @@ class SignalService:
                 symbol=sym,
                 daily=equity_daily[sym],
                 benchmarks_daily=benchmarks_daily,
-                sector_composite=0.0,  # symbol→sector map not in universe yet
+                sector_composite=sector_composite_by_name.get(
+                    self.universe.symbol_sectors.get(sym, ""), 0.0
+                ),
             )
             for sym in result.tradable
         ]
@@ -179,7 +183,9 @@ class SignalService:
                 intraday=intraday_candidates.get(score.symbol),
                 regime=regime,
                 symbol_score=score,
-                sector_composite=0.0,
+                sector_composite=sector_composite_by_name.get(
+                    self.universe.symbol_sectors.get(score.symbol, ""), 0.0
+                ),
                 target_plan=build_target_plan(cfg.risk),
             )
             for detector in EQUITY_DETECTORS:

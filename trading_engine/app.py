@@ -35,6 +35,11 @@ from trading_engine.data.mock_provider import (
     MockMarketDataProvider,
     MockOptionsDataProvider,
 )
+from trading_engine.data.polygon import (
+    PolygonEventsProvider,
+    PolygonMarketDataProvider,
+    PolygonOptionsDataProvider,
+)
 from trading_engine.services.management_service import ManagementService
 from trading_engine.services.scheduler import run_loop, run_once
 from trading_engine.services.signal_service import SignalService
@@ -49,10 +54,19 @@ log = logging.getLogger("trading_engine")
 
 
 def _make_providers(
-    kind: Literal["mock"],
+    kind: Literal["mock", "polygon"], cfg: AppConfig
 ) -> tuple[MarketDataProvider, OptionsDataProvider, EventsProvider]:
     if kind == "mock":
         return MockMarketDataProvider(), MockOptionsDataProvider(), MockEventsProvider()
+    if kind == "polygon":
+        key = cfg.secrets.polygon_api_key
+        if not key:
+            raise SystemExit("POLYGON_API_KEY must be set for --provider polygon")
+        return (
+            PolygonMarketDataProvider(key),
+            PolygonOptionsDataProvider(key),
+            PolygonEventsProvider(key),
+        )
     raise ValueError(f"unknown provider kind: {kind}")
 
 
@@ -80,7 +94,7 @@ def _make_repo(kind: Literal["memory", "sqlite"], cfg: AppConfig) -> Repository:
 
 def _build_service(args: argparse.Namespace) -> tuple[SignalService, ManagementService, AlertSink]:
     cfg = load_app_config()
-    providers = _make_providers(args.provider)
+    providers = _make_providers(args.provider, cfg)
     sink = _make_sink(args.sink, cfg)
     repo = _make_repo(args.repo, cfg)
     signal_service = SignalService(
@@ -149,7 +163,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
 
 
 def _add_common(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--provider", choices=["mock"], default="mock")
+    p.add_argument("--provider", choices=["mock", "polygon"], default="mock")
     p.add_argument("--sink", choices=["console", "memory", "telegram"], default="console")
     p.add_argument("--repo", choices=["memory", "sqlite"], default="memory")
 

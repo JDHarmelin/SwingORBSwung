@@ -116,6 +116,10 @@ class Universe(_Cfg):
     symbols: list[str]
     indices: list[str]
     sector_etfs: dict[str, str]
+    # Symbol → sector key. Keys must match a key in ``sector_etfs`` for the
+    # mapping to contribute to the composite score. Symbols absent here
+    # receive a sector_composite of 0.0 (neutral) — never crash.
+    symbol_sectors: dict[str, str] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

@@ -59,3 +59,37 @@ sector_etfs:
   communication: XLC
   china: FXI
   bitcoin: IBIT
+
+# Symbol → sector classification. Keys must match a key in sector_etfs above.
+# Symbols absent here contribute 0.0 sector strength to the composite.
+symbol_sectors:
+  AAPL: tech_broad
+  MSFT: tech_broad
+  NVDA: semis
+  GOOGL: communication
+  META: communication
+  AMZN: discretionary
+  TSLA: discretionary
+  AVGO: semis
+  AMD: semis
+  NFLX: communication
+  CRM: tech_broad
+  ORCL: tech_broad
+  JPM: financials
+  BAC: financials
+  GS: financials
+  XOM: energy
+  CVX: energy
+  UNH: healthcare
+  LLY: healthcare
+  PFE: healthcare
+  HD: retail
+  WMT: staples
+  COST: staples
+  LMT: defense
+  RTX: defense
+  NOC: defense
+  MU: semis
+  SMCI: tech_broad
+  PLTR: tech_broad
+  COIN: bitcoin
