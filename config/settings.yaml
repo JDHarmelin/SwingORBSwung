@@ -52,6 +52,12 @@ storage:
 alerts:
   dedupe_window_minutes: 30
 
+# Execution-only alerting (confirmation gate + paper tracking).
+execution:
+  candidate_ttl_hours: 24          # PENDING candidates older than this expire
+  paper_rr: 2.0                    # target = entry +/- rr * |entry-stop|
+  paper_track_bars: 30             # how many forward bars to simulate
+
 # Logging
 logging:
   level_env: "LOG_LEVEL"

@@ -8,7 +8,6 @@ signal is fully replayable from stored candles + context (non-negotiable rule).
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol, runtime_checkable
@@ -41,11 +40,17 @@ class SetupContext:
     target_plan: TargetPlan = field(default_factory=TargetPlan)
 
 
-def make_signal_id(symbol: str, setup: SetupType, as_of: datetime, trigger: float) -> str:
-    """Deterministic id from the signal's identity → stable dedupe + replay."""
-    raw = f"{symbol}|{setup.value}|{as_of.isoformat()}|{round(trigger, 4)}"
-    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]  # noqa: S324 (non-crypto id)
-    return f"{symbol.lower()}-{setup.value}-{digest}"
+def make_signal_id(
+    symbol: str, setup: SetupType, direction: Direction, as_of: datetime, trigger: float
+) -> str:
+    """Deterministic id keyed on the candidate's identity for the trading day.
+
+    Format: ``symbol:setup:direction:YYYYMMDD``. Re-scans through the same
+    session upsert the existing PENDING row instead of accumulating duplicates;
+    the trigger isn't included so a tiny price refit doesn't multiply rows.
+    """
+    _ = trigger  # kept in signature for callers that still pass it
+    return f"{symbol.upper()}:{setup.value}:{direction.value}:{as_of:%Y%m%d}"
 
 
 def base_confidence(ctx: SetupContext, setup_quality: float) -> float:
@@ -74,7 +79,7 @@ def build_signal(
     risk_class: RiskClass = RiskClass.STANDARD,
 ) -> Signal:
     return Signal(
-        signal_id=make_signal_id(ctx.symbol, setup, ctx.as_of, trigger_price),
+        signal_id=make_signal_id(ctx.symbol, setup, direction, ctx.as_of, trigger_price),
         timestamp=ctx.as_of,
         symbol=ctx.symbol,
         setup_type=setup,
