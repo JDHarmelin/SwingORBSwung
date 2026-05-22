@@ -59,7 +59,9 @@ def normalize_aggs(payload: dict[str, Any], symbol: str, timeframe: Timeframe) -
     return OHLCVSeries(symbol=symbol, timeframe=timeframe, candles=candles)
 
 
-def normalize_option_chain(payload: dict[str, Any], underlying: str, as_of: datetime) -> OptionChain:
+def normalize_option_chain(
+    payload: dict[str, Any], underlying: str, as_of: datetime
+) -> OptionChain:
     """Convert Polygon options snapshot → OptionChain."""
     contracts: list[OptionContract] = []
     for item in payload.get("results") or []:
@@ -71,7 +73,11 @@ def normalize_option_chain(payload: dict[str, Any], underlying: str, as_of: date
         if not exp_str:
             continue
         exp = date.fromisoformat(exp_str)
-        typ = OptionType.CALL if (details.get("contract_type") or "").lower() == "call" else OptionType.PUT
+        typ = (
+            OptionType.CALL
+            if (details.get("contract_type") or "").lower() == "call"
+            else OptionType.PUT
+        )
         bid = float(quote.get("bid", 0) or 0)
         ask = float(quote.get("ask", 0) or 0)
         contracts.append(
@@ -89,7 +95,9 @@ def normalize_option_chain(payload: dict[str, Any], underlying: str, as_of: date
                 theta=float(greeks.get("theta") or 0) or None,
                 vega=float(greeks.get("vega") or 0) or None,
                 open_interest=int(item.get("open_interest") or 0),
-                volume=int(item.get("day", {}).get("volume", 0) if isinstance(item.get("day"), dict) else 0),
+                volume=int(
+                    item.get("day", {}).get("volume", 0) if isinstance(item.get("day"), dict) else 0
+                ),
             )
         )
     return OptionChain(underlying=underlying, snapshot_at=as_of, contracts=contracts)
@@ -146,7 +154,7 @@ class PolygonClient:
             except ValueError:
                 pass
         # Free tier: wait at least 60s when rate-limited (429 bursts are useless)
-        return min(120.0, max(60.0, 15.0 * (2**attempt)))
+        return float(min(120.0, max(60.0, 15.0 * (2**attempt))))
 
     async def get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         params = dict(params or {})

@@ -45,8 +45,9 @@ def _sample_signal() -> Signal:
 
 def test_format_signal_snapshot() -> None:
     msg = format_signal(_sample_signal())
-    assert "SETUP:" in msg
     assert "NVDA" in msg
+    assert "LONG" in msg
+    assert "DO THIS" in msg
     assert "CONFIDENCE: 81/100" in msg
     assert "132.40" in msg
 

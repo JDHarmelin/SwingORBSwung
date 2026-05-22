@@ -11,6 +11,7 @@ from pathlib import Path
 
 from trading_engine.alerts.console import ConsoleAlertSink
 from trading_engine.core.config import AppConfig, load_app_config
+from trading_engine.core.interfaces import AlertSink
 from trading_engine.data.factory import ProviderBundle, create_providers
 from trading_engine.data.mock_provider import MOCK_SYMBOLS
 from trading_engine.data.universe import resolve_scan_symbols
@@ -18,6 +19,7 @@ from trading_engine.scanners.market_regime import compute_market_regime
 from trading_engine.scanners.sector_rank import rank_sectors
 from trading_engine.scanners.stock_ranker import rank_stocks
 from trading_engine.services.backfill import backfill_universe
+from trading_engine.services.confirmation import PriceCrossConfirmationGate
 from trading_engine.services.scheduler import Scheduler
 from trading_engine.services.signal_service import SignalService
 from trading_engine.storage.db import create_engine_from_config, init_schema
@@ -73,7 +75,7 @@ def _repo() -> SqlRepository:
     return SqlRepository(engine=engine)
 
 
-def _alerts(kind: str):
+def _alerts(kind: str) -> AlertSink:
     if kind == "telegram":
         from trading_engine.alerts.telegram import TelegramAlertSink
 
@@ -86,7 +88,7 @@ def _filter_liquidity(args: argparse.Namespace) -> bool:
         return False
     if getattr(args, "filter_universe", False):
         return True
-    return args.provider == "polygon"
+    return bool(args.provider == "polygon")
 
 
 def _symbols_override(args: argparse.Namespace) -> list[str] | None:
@@ -149,9 +151,15 @@ async def cmd_scan_once(args: argparse.Namespace) -> None:
     config = load_app_config()
     providers = create_providers(args.provider, config=config)
     symbols = await _resolve_symbols(args, providers, config=config)
-    svc = SignalService(providers, _repo(), _alerts(args.alerts), config=config)
-    ids = await svc.scan_once(symbols, filter_liquidity=False)
-    print(f"Created {len(ids)} signal(s) from {len(symbols)} symbol(s)")
+    gate = PriceCrossConfirmationGate(providers.market)
+    svc = SignalService(providers, _repo(), _alerts(args.alerts), config=config, gate=gate)
+    candidates = await svc.scan_once(symbols, filter_liquidity=False, alert_candidates=False)
+    confirmed = await svc.confirm_and_alert()
+    tracked = await svc.track_outcomes()
+    print(
+        f"{len(candidates)} candidate(s) from {len(symbols)} symbol(s); "
+        f"{len(confirmed)} confirmed → alerted; {len(tracked)} outcome(s) logged"
+    )
 
 
 async def cmd_regime(args: argparse.Namespace) -> None:
@@ -185,7 +193,8 @@ async def cmd_run(args: argparse.Namespace) -> None:
     config = load_app_config()
     providers = create_providers(args.provider, config=config)
     symbols = await _resolve_symbols(args, providers, config=config)
-    svc = SignalService(providers, _repo(), _alerts(args.alerts), config=config)
+    gate = PriceCrossConfirmationGate(providers.market)
+    svc = SignalService(providers, _repo(), _alerts(args.alerts), config=config, gate=gate)
     interval = getattr(args, "interval", 300)
     sched = Scheduler(svc, intraday_interval_sec=interval)
     await sched.run(symbols)

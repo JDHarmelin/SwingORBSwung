@@ -36,9 +36,7 @@ def load_telegram_credentials() -> tuple[str, str]:
     token = env.get("TELEGRAM_BOT_TOKEN", "")
     chat_id = env.get("TELEGRAM_CHAT_ID", "")
     if not token or not chat_id:
-        raise ValueError(
-            "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env at the repo root."
-        )
+        raise ValueError("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env at the repo root.")
     return token, chat_id
 
 
@@ -49,7 +47,7 @@ def verify_bot_username(token: str, *, expected: str = REQUIRED_BOT_USERNAME) ->
         data = json.loads(resp.read())
     if not data.get("ok"):
         raise ValueError(f"Telegram getMe failed: {data}")
-    username = (data.get("result") or {}).get("username", "")
+    username: str = (data.get("result") or {}).get("username", "")
     if username.lower() != expected.lower():
         raise ValueError(
             f"TELEGRAM_BOT_TOKEN is for @{username}, not @{expected}. "

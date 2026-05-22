@@ -46,7 +46,9 @@ from trading_engine.storage.serializers import (
 class SqlRepository:
     """Async-compatible repository (methods are async for interface compliance)."""
 
-    def __init__(self, engine: Engine | None = None, session_maker: sessionmaker | None = None) -> None:
+    def __init__(
+        self, engine: Engine | None = None, session_maker: sessionmaker[Session] | None = None
+    ) -> None:
         if engine is None:
             from trading_engine.core.config import load_app_config
 
@@ -113,7 +115,9 @@ class SqlRepository:
 
     async def latest_sector_scores(self) -> list[SectorScore]:
         with self._sess() as s:
-            subq = select(SectorScoreRow.timestamp).order_by(SectorScoreRow.timestamp.desc()).limit(1)
+            subq = (
+                select(SectorScoreRow.timestamp).order_by(SectorScoreRow.timestamp.desc()).limit(1)
+            )
             ts = s.scalar(subq)
             if ts is None:
                 return []
@@ -127,7 +131,9 @@ class SqlRepository:
 
     async def latest_symbol_scores(self) -> list[SymbolScore]:
         with self._sess() as s:
-            subq = select(SymbolScoreRow.timestamp).order_by(SymbolScoreRow.timestamp.desc()).limit(1)
+            subq = (
+                select(SymbolScoreRow.timestamp).order_by(SymbolScoreRow.timestamp.desc()).limit(1)
+            )
             ts = s.scalar(subq)
             if ts is None:
                 return []
@@ -158,9 +164,7 @@ class SqlRepository:
             SignalStatus.TRIMMED.value,
         }
         with self._sess() as s:
-            rows = s.scalars(
-                select(SignalRow).where(SignalRow.status.in_(open_statuses))
-            ).all()
+            rows = s.scalars(select(SignalRow).where(SignalRow.status.in_(open_statuses))).all()
         return [row_to_signal(r) for r in rows]
 
     async def append_signal_event(self, event: SignalEvent) -> None:

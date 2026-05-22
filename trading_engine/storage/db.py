@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from trading_engine.core.config import AppConfig
 from trading_engine.storage.models import Base
@@ -20,5 +20,5 @@ def init_schema(engine: Engine) -> None:
     Base.metadata.create_all(engine)
 
 
-def session_factory(engine: Engine) -> sessionmaker:
+def session_factory(engine: Engine) -> sessionmaker[Session]:
     return sessionmaker(bind=engine, expire_on_commit=False)
