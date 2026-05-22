@@ -65,9 +65,7 @@ def test_compression_on_flag() -> None:
 
 def test_relative_weakness_blocked_long_regime() -> None:
     det = RelativeWeaknessSetup()
-    s = det.detect(
-        _ctx("BRKD", clean_uptrend_series("BRKD"), regime=RegimeType.LONG_BIAS)
-    )
+    s = det.detect(_ctx("BRKD", clean_uptrend_series("BRKD"), regime=RegimeType.LONG_BIAS))
     assert len(s) == 0
 
 

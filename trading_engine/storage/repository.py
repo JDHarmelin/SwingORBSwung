@@ -180,3 +180,12 @@ class SqlRepository:
                 .order_by(SignalEventRow.event_timestamp)
             ).all()
         return [row_to_event(r) for r in rows]
+
+    async def list_events_by_type(self, event_type: str) -> list[SignalEvent]:
+        with self._sess() as s:
+            rows = s.scalars(
+                select(SignalEventRow)
+                .where(SignalEventRow.event_type == event_type)
+                .order_by(SignalEventRow.event_timestamp)
+            ).all()
+        return [row_to_event(r) for r in rows]

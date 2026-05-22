@@ -115,6 +115,8 @@ class Repository(Protocol):
 
     async def list_signal_events(self, signal_id: str) -> list[SignalEvent]: ...
 
+    async def list_events_by_type(self, event_type: str) -> list[SignalEvent]: ...
+
 
 __all__ = [
     "AlertSink",

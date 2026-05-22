@@ -52,6 +52,10 @@ storage:
 alerts:
   dedupe_window_minutes: 30
 
+# Execution-only layer: candidate lifecycle.
+execution:
+  candidate_ttl_hours: 24          # PENDING candidates older than this expire (no re-confirm)
+
 # Logging
 logging:
   level_env: "LOG_LEVEL"

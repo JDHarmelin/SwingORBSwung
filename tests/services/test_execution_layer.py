@@ -5,18 +5,22 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 
+from trading_engine.core.config import load_app_config
 from trading_engine.core.types import (
     Candle,
     Direction,
     OHLCVSeries,
     SetupType,
     Signal,
+    SignalEvent,
     SignalStatus,
     TargetPlan,
     Timeframe,
 )
-from trading_engine.services.confirmation import PriceCrossConfirmationGate
+from trading_engine.services.confirmation import ConfirmationDecision, PriceCrossConfirmationGate
 from trading_engine.services.paper_tracker import simulate_outcome
+from trading_engine.services.signal_service import SignalService
+from trading_engine.setups.base import _candidate_id
 
 
 def _candle(day: int, *, high: float, low: float, close: float) -> Candle:
@@ -119,3 +123,115 @@ def test_gate_waits_below_trigger_long() -> None:
     decision = asyncio.run(gate.assess(_signal(100.0, 95.0)))
     assert decision.confirmed is False
     assert "awaiting_trigger" in decision.reason_codes
+
+
+# --- candidate dedupe + TTL ---------------------------------------------------
+
+
+class _FakeRepo:
+    """In-memory Repository stand-in for the execution-layer service tests."""
+
+    def __init__(self) -> None:
+        self.signals: dict[str, Signal] = {}
+        self.events: list[SignalEvent] = []
+
+    async def save_signal(self, signal: Signal) -> None:
+        self.signals[signal.signal_id] = signal
+
+    async def get_signal(self, signal_id: str) -> Signal | None:
+        return self.signals.get(signal_id)
+
+    async def open_signals(self) -> list[Signal]:
+        open_st = {SignalStatus.PENDING, SignalStatus.TRIGGERED, SignalStatus.TRIMMED}
+        return [s for s in self.signals.values() if s.status in open_st]
+
+    async def append_signal_event(self, event: SignalEvent) -> None:
+        self.events.append(event)
+
+    async def list_signal_events(self, signal_id: str) -> list[SignalEvent]:
+        return [e for e in self.events if e.signal_id == signal_id]
+
+    async def list_events_by_type(self, event_type: str) -> list[SignalEvent]:
+        return [e for e in self.events if e.event_type == event_type]
+
+    async def latest_regime(self) -> None:
+        return None
+
+
+class _FakeAlert:
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+
+    async def send(self, message: str, *, dedupe_key: str) -> None:
+        self.sent.append((message, dedupe_key))
+
+
+class _YesGate:
+    async def assess(self, signal: Signal) -> ConfirmationDecision:
+        return ConfirmationDecision(True, 0.8, ["always"])
+
+
+def _service(repo: _FakeRepo, alerts: _FakeAlert) -> SignalService:
+    return SignalService(None, repo, alerts, config=load_app_config(), gate=_YesGate())  # type: ignore[arg-type]
+
+
+def _pending(signal_id: str, *, age_hours: float) -> Signal:
+    sig = _signal(100.0, 95.0)
+    sig.signal_id = signal_id
+    sig.timestamp = datetime.now(tz=UTC) - timedelta(hours=age_hours)
+    return sig
+
+
+def test_candidate_id_is_deterministic_per_symbol_setup_day() -> None:
+    ts = datetime(2026, 5, 21, 14, 30, tzinfo=UTC)
+    a = _candidate_id("AAPL", SetupType.B_BREAKOUT_RETEST, Direction.LONG, ts)
+    b = _candidate_id("AAPL", SetupType.B_BREAKOUT_RETEST, Direction.LONG, ts)
+    assert a == b == "AAPL:B_breakout_retest:long:20260521"
+    # different direction and different day produce different ids
+    assert _candidate_id("AAPL", SetupType.B_BREAKOUT_RETEST, Direction.SHORT, ts) != a
+    next_day = ts + timedelta(days=1)
+    assert _candidate_id("AAPL", SetupType.B_BREAKOUT_RETEST, Direction.LONG, next_day) != a
+
+
+def test_expire_stale_candidates() -> None:
+    repo = _FakeRepo()
+    asyncio.run(repo.save_signal(_pending("old", age_hours=48)))
+    asyncio.run(repo.save_signal(_pending("fresh", age_hours=1)))
+    svc = _service(repo, _FakeAlert())
+
+    expired = asyncio.run(svc.expire_stale_candidates())
+
+    assert expired == ["old"]
+    assert repo.signals["old"].status == SignalStatus.EXPIRED_RISK
+    assert repo.signals["fresh"].status == SignalStatus.PENDING
+    assert any(e.event_type == "expired_candidate" and e.signal_id == "old" for e in repo.events)
+
+
+def test_confirm_signal_fires_one_alert() -> None:
+    repo = _FakeRepo()
+    sig = _pending("fresh", age_hours=1)
+    asyncio.run(repo.save_signal(sig))
+    alerts = _FakeAlert()
+    svc = _service(repo, alerts)
+
+    sent = asyncio.run(svc.confirm_signal(sig, confidence=0.9, reason_codes=["hermes"]))
+
+    assert sent is True
+    assert sig.status == SignalStatus.TRIGGERED
+    assert len(alerts.sent) == 1
+    triggered = [e for e in repo.events if e.event_type == "triggered"]
+    assert triggered and triggered[0].event_payload["confidence"] == 0.9
+
+
+def test_confirm_and_alert_skips_stale() -> None:
+    repo = _FakeRepo()
+    asyncio.run(repo.save_signal(_pending("old", age_hours=48)))
+    asyncio.run(repo.save_signal(_pending("fresh", age_hours=1)))
+    alerts = _FakeAlert()
+    svc = _service(repo, alerts)
+
+    confirmed = asyncio.run(svc.confirm_and_alert())
+
+    assert confirmed == ["fresh"]
+    assert repo.signals["old"].status == SignalStatus.PENDING  # stale: untouched, not fired
+    assert len(alerts.sent) == 1

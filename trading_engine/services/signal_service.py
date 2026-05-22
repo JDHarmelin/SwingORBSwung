@@ -16,7 +16,13 @@ from trading_engine.alerts.dedupe import AlertDeduper
 from trading_engine.alerts.formatter import format_signal
 from trading_engine.core.config import AppConfig, load_app_config
 from trading_engine.core.interfaces import AlertSink, Repository
-from trading_engine.core.types import RegimeType, SignalEvent, SignalStatus, Timeframe
+from trading_engine.core.types import (
+    RegimeType,
+    Signal,
+    SignalEvent,
+    SignalStatus,
+    Timeframe,
+)
 from trading_engine.data.factory import ProviderBundle
 from trading_engine.data.universe import resolve_scan_symbols
 from trading_engine.risk.contract_selector import select_contract
@@ -133,38 +139,106 @@ class SignalService:
                     created.append(signal.signal_id)
         return created
 
+    @property
+    def candidate_ttl_hours(self) -> int:
+        return self._config.settings.execution.candidate_ttl_hours
+
+    def _candidate_ttl(self) -> timedelta:
+        return timedelta(hours=self.candidate_ttl_hours)
+
+    def is_stale(self, signal: Signal, *, now: datetime | None = None) -> bool:
+        """True if a candidate is past its TTL (public for the MCP bridge)."""
+        now = now or datetime.now(tz=UTC)
+        return bool((now - signal.timestamp) > self._candidate_ttl())
+
+    async def expire_stale_candidates(self) -> list[str]:
+        """Expire PENDING candidates older than the TTL so the backlog can't grow.
+
+        Without this, every tick re-confirms an ever-growing pile of stale
+        PENDINGs. Stale candidates move to ``EXPIRED_RISK`` and are logged
+        (event_type ``expired_candidate``). Returns the expired signal_ids.
+        """
+        now = datetime.now(tz=UTC)
+        expired: list[str] = []
+        for signal in await self._repo.open_signals():
+            if signal.status != SignalStatus.PENDING or not self.is_stale(signal, now=now):
+                continue
+            age_h = (now - signal.timestamp).total_seconds() / 3600.0
+            signal.status = SignalStatus.EXPIRED_RISK
+            await self._repo.save_signal(signal)
+            await self._repo.append_signal_event(
+                SignalEvent(
+                    signal_id=signal.signal_id,
+                    event_timestamp=now,
+                    event_type="expired_candidate",
+                    event_payload={
+                        "symbol": signal.symbol,
+                        "age_hours": round(age_h, 2),
+                        "ttl_hours": self._config.settings.execution.candidate_ttl_hours,
+                    },
+                )
+            )
+            expired.append(signal.signal_id)
+        return expired
+
+    async def confirm_signal(
+        self,
+        signal: Signal,
+        *,
+        confidence: float,
+        reason_codes: list[str],
+    ) -> bool:
+        """Mark one candidate TRIGGERED and fire its execution alert.
+
+        The single execution moment for a candidate: flips status, logs a
+        ``triggered`` event, and sends ONE deduped alert. Alert/paper-only —
+        this never places an order. Shared by the mechanical gate and the
+        Hermes MCP bridge (which supplies its own confidence/reason_codes).
+        Returns True if an alert was sent (False if deduped).
+        """
+        signal.status = SignalStatus.TRIGGERED
+        await self._repo.save_signal(signal)
+        await self._repo.append_signal_event(
+            SignalEvent(
+                signal_id=signal.signal_id,
+                event_timestamp=datetime.now(tz=UTC),
+                event_type="triggered",
+                event_payload={
+                    "symbol": signal.symbol,
+                    "price": signal.trigger_price,
+                    "confidence": confidence,
+                    "reason_codes": reason_codes,
+                },
+            )
+        )
+        key = f"{signal.signal_id}:{signal.status.value}"
+        if self._deduper.should_send(key):
+            await self._alerts.send(format_signal(signal), dedupe_key=key)
+            return True
+        return False
+
     async def confirm_and_alert(self) -> list[str]:
         """Assess open candidates; mark + alert only those confirmed for execution.
 
         This is the execution-only gate: Telegram fires here, not on candidate
         generation. With no gate configured, nothing fires (candidates wait).
+        Stale candidates (past TTL) are skipped — call
+        ``expire_stale_candidates`` to retire them.
         """
         if self._gate is None:
             return []
         confirmed: list[str] = []
         for signal in await self._repo.open_signals():
-            if signal.status != SignalStatus.PENDING:
+            if signal.status != SignalStatus.PENDING or self.is_stale(signal):
                 continue
             decision = await self._gate.assess(signal)
             if not decision.confirmed:
                 continue
-            signal.status = SignalStatus.TRIGGERED
-            await self._repo.save_signal(signal)
-            await self._repo.append_signal_event(
-                SignalEvent(
-                    signal_id=signal.signal_id,
-                    event_timestamp=datetime.now(tz=UTC),
-                    event_type="triggered",
-                    event_payload={
-                        "symbol": signal.symbol,
-                        "price": signal.trigger_price,
-                        "reason_codes": decision.reason_codes,
-                    },
-                )
+            await self.confirm_signal(
+                signal,
+                confidence=decision.confidence,
+                reason_codes=decision.reason_codes,
             )
-            key = f"{signal.signal_id}:{signal.status.value}"
-            if self._deduper.should_send(key):
-                await self._alerts.send(format_signal(signal), dedupe_key=key)
             confirmed.append(signal.signal_id)
         return confirmed
 

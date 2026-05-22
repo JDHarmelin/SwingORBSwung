@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
@@ -37,6 +36,17 @@ class Setup(Protocol):
     def detect(self, context: SetupContext) -> list[Signal]: ...
 
 
+def _candidate_id(symbol: str, setup_type: SetupType, direction: Direction, ts: datetime) -> str:
+    """Deterministic candidate id: one candidate per symbol+setup+direction+UTC day.
+
+    Re-scanning the same setup on the same day yields the same id, so
+    ``save_signal`` upserts in place instead of piling up duplicate PENDING rows
+    (the candidate-backlog bug). A new trading day produces a fresh id.
+    """
+    day = ts.astimezone(UTC).strftime("%Y%m%d")
+    return f"{symbol}:{setup_type.value}:{direction.value}:{day}"
+
+
 def _new_signal(
     context: SetupContext,
     setup_type: SetupType,
@@ -47,9 +57,10 @@ def _new_signal(
     reason_codes: list[str],
     confidence: float,
 ) -> Signal:
+    now = datetime.now(tz=UTC)
     return Signal(
-        signal_id=str(uuid.uuid4()),
-        timestamp=datetime.now(tz=UTC),
+        signal_id=_candidate_id(context.symbol, setup_type, direction, now),
+        timestamp=now,
         symbol=context.symbol,
         setup_type=setup_type,
         direction=direction,
