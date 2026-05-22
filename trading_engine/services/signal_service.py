@@ -148,10 +148,20 @@ class SignalService:
         index_daily = await self._fetch_daily(cfg.regime.index_symbols, as_of)
         index_intraday = await self._fetch_intraday(cfg.regime.index_symbols, as_of)
         regime_inputs = [
-            RegimeInputs(symbol=s, daily=index_daily[s], intraday=index_intraday.get(s))
+            RegimeInputs(
+                symbol=s,
+                daily=index_daily[s],
+                # Only use intraday if it has bars (provider may return empty).
+                intraday=index_intraday.get(s)
+                if index_intraday.get(s) and index_intraday[s].candles
+                else None,
+            )
             for s in cfg.regime.index_symbols
-            if s in index_daily
+            if s in index_daily and index_daily[s].candles
         ]
+        if not regime_inputs:
+            log.warning("no index data — cannot classify regime; aborting pipeline")
+            return result
         regime = classify_regime(
             regime_inputs,
             as_of=as_of,
@@ -173,19 +183,25 @@ class SignalService:
         # 3. Sector ranking (SPY as benchmark).
         sector_composite_by_name: dict[str, float] = {}
         spy = index_daily.get("SPY")
-        if spy is not None:
+        if spy is not None and spy.candles:
             sector_series = await self._fetch_daily(list(self.universe.sector_etfs.values()), as_of)
             etf_to_name = {etf: name for name, etf in self.universe.sector_etfs.items()}
             sector_input = {
-                etf_to_name[etf]: series for etf, series in sector_series.items() if etf in etf_to_name
+                etf_to_name[etf]: series
+                for etf, series in sector_series.items()
+                if etf in etf_to_name and series.candles
             }
             sector_scores = rank_sectors(sector_input, spy, as_of=as_of)
             await self.repo.save_sector_scores(sector_scores)
             result.sector_scores = sector_scores
             sector_composite_by_name = {s.sector: s.composite_score for s in sector_scores}
 
-        # 4. Stock ranking — RS vs SPY/QQQ.
-        benchmarks_daily = {s: index_daily[s] for s in ("SPY", "QQQ") if s in index_daily}
+        # 4. Stock ranking — RS vs SPY/QQQ (skip benchmarks the provider couldn't supply).
+        benchmarks_daily = {
+            s: index_daily[s]
+            for s in ("SPY", "QQQ")
+            if s in index_daily and index_daily[s].candles
+        }
         if not benchmarks_daily:
             log.warning("no benchmark daily series — skipping ranker")
             return result
@@ -232,7 +248,7 @@ class SignalService:
 
         # 6. Index tactical setups.
         for sym in cfg.regime.index_symbols:
-            if sym not in index_daily:
+            if sym not in index_daily or not index_daily[sym].candles:
                 continue
             ctx = SetupContext(
                 symbol=sym,
@@ -343,24 +359,31 @@ class SignalService:
             expired.append(signal.signal_id)
         return expired
 
-    async def track_outcomes(self, as_of: datetime) -> list[str]:
+    async def track_outcomes(
+        self, as_of: datetime, *, min_age_minutes: int = 15
+    ) -> list[str]:
         """Simulate each candidate forward on its underlying; record a
         ``paper_outcome`` event the first time it has terminal information.
-        Idempotent: an existing paper_outcome event short-circuits."""
+
+        Idempotent — an existing paper_outcome short-circuits. Candidates
+        younger than ``min_age_minutes`` are skipped (nothing forward to
+        simulate yet; also avoids degenerate zero-length data fetches).
+        """
         recorded: list[str] = []
-        # Recent intraday window for the simulation. Daily would also work but
-        # 5m gives finer-grained trigger detection.
+        min_age = timedelta(minutes=min_age_minutes)
         for signal in await self.repo.open_signals():
+            sig_ts = _aware(signal.timestamp)
+            if as_of - sig_ts < min_age:
+                continue
             # Already recorded?
             events = await self.repo.list_signal_events(signal.signal_id)
             if any(e.event_type == "paper_outcome" for e in events):
                 continue
             series = await self.market_data.get_ohlcv(
-                signal.symbol,
-                Timeframe.M5,
-                _aware(signal.timestamp),
-                as_of,
+                signal.symbol, Timeframe.M5, sig_ts, as_of,
             )
+            if not series.candles:
+                continue  # provider couldn't supply data; try again next tick
             outcome = simulate_outcome(
                 signal, series, rr=self.settings.execution.paper_rr
             )

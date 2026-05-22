@@ -151,9 +151,20 @@ class PolygonMarketDataProvider:
             f_str = str(int(start.timestamp() * 1000))
             t_str = str(int(end.timestamp() * 1000))
         path = f"/v2/aggs/ticker/{symbol}/range/{mult}/{span}/{f_str}/{t_str}"
-        data = await self._http.get_json(
-            path, params={"adjusted": "true", "sort": "asc", "limit": 50000}
-        )
+        try:
+            data = await self._http.get_json(
+                path, params={"adjusted": "true", "sort": "asc", "limit": 50000}
+            )
+        except httpx.HTTPStatusError as exc:
+            code = exc.response.status_code if exc.response is not None else 0
+            # Some plans/tickers are gated; degrade to empty so callers can decide.
+            if code in (401, 403, 404):
+                log.warning(
+                    "polygon aggs unavailable for %s %s (HTTP %d) — returning empty",
+                    symbol, timeframe.value, code,
+                )
+                return OHLCVSeries(symbol=symbol, timeframe=timeframe, candles=[])
+            raise
         rows: list[dict[str, Any]] = data.get("results") or []
         candles = [_agg_to_candle(symbol, timeframe, r) for r in rows]
         return OHLCVSeries(symbol=symbol, timeframe=timeframe, candles=candles)
@@ -223,21 +234,41 @@ class PolygonOptionsDataProvider:
         self._base_url = base_url
 
     async def get_option_chain(self, underlying: str, as_of: datetime | None = None) -> OptionChain:
+        """Return an option chain — or an empty chain if Polygon refuses
+        (403/404). Options snapshots aren't on every plan; returning empty
+        keeps the alert path running (the alert just says "Awaiting chain")
+        instead of failing the whole pipeline.
+        """
         path = f"/v3/snapshot/options/{underlying}"
+        snapshot_at = as_of or datetime.now(tz=UTC)
+        if snapshot_at.tzinfo is None:
+            snapshot_at = snapshot_at.replace(tzinfo=UTC)
+
         contracts: list[OptionContract] = []
         next_url: str | None = path
         params: dict[str, Any] | None = {"limit": 250}
         while next_url is not None:
-            data = await self._http.get_json(next_url, params=params)
+            try:
+                data = await self._http.get_json(next_url, params=params)
+            except httpx.HTTPStatusError as exc:
+                code = exc.response.status_code if exc.response is not None else 0
+                if code in (401, 403, 404):
+                    log.warning(
+                        "polygon options chain unavailable for %s (HTTP %d) — "
+                        "returning empty chain",
+                        underlying,
+                        code,
+                    )
+                    return OptionChain(
+                        underlying=underlying, snapshot_at=snapshot_at, contracts=[]
+                    )
+                raise
             for row in data.get("results") or []:
                 c = _snapshot_to_contract(underlying, row)
                 if c is not None:
                     contracts.append(c)
             next_url = data.get("next_url")
             params = None  # next_url already carries query params
-        snapshot_at = as_of or datetime.now(tz=UTC)
-        if snapshot_at.tzinfo is None:
-            snapshot_at = snapshot_at.replace(tzinfo=UTC)
         return OptionChain(underlying=underlying, snapshot_at=snapshot_at, contracts=contracts)
 
     async def aclose(self) -> None:
