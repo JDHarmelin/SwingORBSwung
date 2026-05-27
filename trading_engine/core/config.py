@@ -30,6 +30,26 @@ class LiquidityConfig(_Cfg):
     min_option_open_interest: int
     min_option_volume: int
     max_option_bid_ask_spread_pct: float
+    # Per-risk-class overrides. Keys match RiskClass.value (standard/a_plus/
+    # lotto/day_trade/hedge). Missing keys fall back to the top-level floor.
+    # Lotto and day-trade flows often need looser floors (cheap weeklies have
+    # thin OI); a_plus can stay tight.
+    option_floor_overrides: dict[str, dict[str, float]] = {}
+
+    def for_risk_class(self, risk_class_value: str) -> "LiquidityConfig":
+        """Return a LiquidityConfig with overrides applied for ``risk_class_value``."""
+        ov = self.option_floor_overrides.get(risk_class_value) or {}
+        if not ov:
+            return self
+        return self.model_copy(
+            update={
+                "min_option_open_interest": int(ov.get("min_option_open_interest", self.min_option_open_interest)),
+                "min_option_volume": int(ov.get("min_option_volume", self.min_option_volume)),
+                "max_option_bid_ask_spread_pct": float(
+                    ov.get("max_option_bid_ask_spread_pct", self.max_option_bid_ask_spread_pct)
+                ),
+            }
+        )
 
 
 class FactorWeights(_Cfg):
