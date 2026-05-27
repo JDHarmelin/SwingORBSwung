@@ -98,6 +98,8 @@ class SignalRow(Base):
     status: Mapped[str] = mapped_column(String(32), index=True)
     risk_class: Mapped[str] = mapped_column(String(16))
     reason_codes_json: Mapped[Any] = mapped_column(JSON, default=list)
+    confidence_components_json: Mapped[Any] = mapped_column(JSON, default=dict)
+    risk_profile_json: Mapped[Any] = mapped_column(JSON, default=dict)
 
 
 class SignalEventRow(Base):

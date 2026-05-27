@@ -25,6 +25,15 @@ risk:
   move_stop_to_be_after_trim1: true
   runner_trail: "8EMA"             # 8EMA | prior_candle_low | VWAP
   forced_exit_before_event: true
+  # Per-setup-class dollar risk caps for R-driven position sizing. Stop width
+  # varies wildly across setups (SPY index-tactical ~1pt vs swing breakouts
+  # 50+pt), so sizing must be $-budget / stop-distance, not string-tag.
+  max_loss_dollars:
+    standard: 200.0
+    a_plus: 400.0
+    lotto: 100.0
+    day_trade: 150.0
+    hedge: 150.0
 
 # Contract selection (spec §7).
 contract:

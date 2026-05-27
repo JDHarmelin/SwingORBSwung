@@ -57,6 +57,12 @@ class RelativeWeaknessBreakdown:
                 ),
                 setup_quality=min(1.0, abs(rs) + 0.3),
                 reason_codes=["Relative weakness", "Lost key support", *trend.reason_codes[:1]],
+                confidence_components={
+                    "rs_score": float(rs),
+                    "sector_composite": float(ctx.sector_composite),
+                    "trend_score": float(trend.score),
+                    "support_break_atr": float((support - close) / atr),
+                },
             )
         ]
 

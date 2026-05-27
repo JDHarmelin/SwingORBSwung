@@ -50,6 +50,12 @@ class BreakoutContinuation:
                         rationale=f"{ctx.symbol} broke {level:.2f} on volume in an uptrend.",
                         setup_quality=min(1.0, vol.relative_volume / 2.0),
                         reason_codes=reasons,
+                        confidence_components={
+                            "trend_score": float(trend.score),
+                            "volume_score": float(vol.score),
+                            "relative_volume": float(vol.relative_volume),
+                            "breakout_distance_atr": float((close - level) / atr),
+                        },
                     )
                 ]
 
@@ -70,6 +76,12 @@ class BreakoutContinuation:
                         rationale=f"{ctx.symbol} broke down through {level:.2f} on volume.",
                         setup_quality=min(1.0, vol.relative_volume / 2.0),
                         reason_codes=reasons,
+                        confidence_components={
+                            "trend_score": float(trend.score),
+                            "volume_score": float(vol.score),
+                            "relative_volume": float(vol.relative_volume),
+                            "breakdown_distance_atr": float((level - close) / atr),
+                        },
                     )
                 ]
         return []
