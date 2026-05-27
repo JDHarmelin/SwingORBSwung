@@ -282,7 +282,7 @@ class SignalService:
             direction=signal.direction,
             as_of=signal.timestamp.date(),
             contract_cfg=cfg.contract,
-            liquidity=cfg.liquidity,
+            liquidity=cfg.liquidity.for_risk_class(risk_class.value),
             risk_class=risk_class,
             day_trade=day_trade,
         )

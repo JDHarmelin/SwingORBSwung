@@ -39,11 +39,13 @@ from trading_engine.data.mock_provider import (
     MockMarketDataProvider,
     MockOptionsDataProvider,
 )
+from trading_engine.data.chained_options import ChainedOptionsDataProvider
 from trading_engine.data.polygon import (
     PolygonEventsProvider,
     PolygonMarketDataProvider,
     PolygonOptionsDataProvider,
 )
+from trading_engine.data.yfinance_options import YFinanceOptionsDataProvider
 from trading_engine.core.types import Timeframe
 from trading_engine.services.backfill import backfill_universe
 from trading_engine.services.confirmation import (
@@ -80,9 +82,16 @@ def _make_providers(
         key = cfg.secrets.polygon_api_key
         if not key:
             raise SystemExit("POLYGON_API_KEY must be set for --provider polygon")
+        # Stock Starter has no options entitlement; fall through to yfinance
+        # (free, ~15-min delayed) when Polygon returns an empty chain. If a
+        # paid Polygon options upgrade lands later, it'll win automatically.
+        options = ChainedOptionsDataProvider(
+            [PolygonOptionsDataProvider(key), YFinanceOptionsDataProvider()],
+            names=["polygon", "yfinance"],
+        )
         return (
             PolygonMarketDataProvider(key),
-            PolygonOptionsDataProvider(key),
+            options,
             PolygonEventsProvider(key),
         )
     raise ValueError(f"unknown provider kind: {kind}")

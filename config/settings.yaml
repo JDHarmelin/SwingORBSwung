@@ -8,6 +8,29 @@ liquidity:
   min_option_open_interest: 500
   min_option_volume: 100
   max_option_bid_ask_spread_pct: 8.0
+  # Per-risk-class overrides — looser for lotto/day_trade (thin weeklies);
+  # a_plus stays as-is so confidence is matched by execution quality.
+  option_floor_overrides:
+    a_plus:
+      min_option_open_interest: 750
+      min_option_volume: 150
+      max_option_bid_ask_spread_pct: 6.0
+    standard:
+      min_option_open_interest: 500
+      min_option_volume: 100
+      max_option_bid_ask_spread_pct: 8.0
+    day_trade:
+      min_option_open_interest: 200
+      min_option_volume: 250
+      max_option_bid_ask_spread_pct: 10.0
+    lotto:
+      min_option_open_interest: 100
+      min_option_volume: 50
+      max_option_bid_ask_spread_pct: 12.0
+    hedge:
+      min_option_open_interest: 250
+      min_option_volume: 50
+      max_option_bid_ask_spread_pct: 10.0
 
 # Composite score weights — must sum to 1.0 (spec §5).
 factor_weights:
