@@ -7,6 +7,8 @@ from datetime import UTC, date, datetime
 import pytest
 
 from trading_engine.alerts.formatter import (
+    coalesce_signals,
+    coalesced_dedupe_key,
     dedupe_key,
     event_dedupe_key,
     format_event,
@@ -99,6 +101,82 @@ async def test_in_memory_sink_dedupes() -> None:
     await sink.send(msg, dedupe_key=dedupe_key(sig))
     await sink.send(msg, dedupe_key=dedupe_key(sig))  # same key — drop
     assert len(sink.messages) == 1
+
+
+def _variant(
+    *,
+    signal_id: str,
+    setup: SetupType,
+    confidence: float,
+    direction: Direction = Direction.LONG,
+    timestamp: datetime = _AS_OF,
+) -> Signal:
+    return Signal(
+        signal_id=signal_id,
+        timestamp=timestamp,
+        symbol="GS",
+        setup_type=setup,
+        direction=direction,
+        trigger_price=500.0,
+        stop_price=495.0,
+        target_plan=TargetPlan(),
+        contract=None,
+        rationale="rationale",
+        confidence=confidence,
+        risk_class=RiskClass.STANDARD,
+        reason_codes=["reason"],
+    )
+
+
+def test_coalesce_single_match_passes_through() -> None:
+    sig = _variant(
+        signal_id="gs-A", setup=SetupType.A_BREAKOUT_CONTINUATION, confidence=0.60
+    )
+    groups = coalesce_signals([sig])
+    assert len(groups) == 1
+    primary, companions = groups[0]
+    assert primary is sig
+    assert companions == []
+    msg = format_signal(primary, companions=companions)
+    assert "ALSO:" not in msg
+
+
+def test_coalesce_same_ticker_bias_bar_collapses() -> None:
+    cont = _variant(
+        signal_id="gs-A", setup=SetupType.A_BREAKOUT_CONTINUATION, confidence=0.60
+    )
+    retest = _variant(
+        signal_id="gs-B", setup=SetupType.B_BREAKOUT_RETEST, confidence=0.68
+    )
+    groups = coalesce_signals([cont, retest])
+    assert len(groups) == 1
+    primary, companions = groups[0]
+    # Highest confidence (retest, 0.68) wins.
+    assert primary.signal_id == "gs-B"
+    assert [c.signal_id for c in companions] == ["gs-A"]
+    msg = format_signal(primary, companions=companions)
+    assert "SETUP: Breakout Retest" in msg
+    assert "CONFIDENCE: 68/100" in msg
+    assert "ALSO: Breakout Continuation (60)" in msg
+    # Dedupe key is stable regardless of input order.
+    assert coalesced_dedupe_key(primary, companions) == coalesced_dedupe_key(
+        *coalesce_signals([retest, cont])[0]
+    )
+
+
+def test_coalesce_different_bias_does_not_collapse() -> None:
+    long_sig = _variant(
+        signal_id="gs-L", setup=SetupType.A_BREAKOUT_CONTINUATION, confidence=0.60
+    )
+    short_sig = _variant(
+        signal_id="gs-S",
+        setup=SetupType.E_RELATIVE_WEAKNESS,
+        confidence=0.70,
+        direction=Direction.SHORT,
+    )
+    groups = coalesce_signals([long_sig, short_sig])
+    assert len(groups) == 2
+    assert all(companions == [] for _, companions in groups)
 
 
 @pytest.mark.asyncio
