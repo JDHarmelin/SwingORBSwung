@@ -44,6 +44,8 @@ from trading_engine.data.polygon import (
     PolygonMarketDataProvider,
     PolygonOptionsDataProvider,
 )
+from trading_engine.core.types import Timeframe
+from trading_engine.services.backfill import backfill_universe
 from trading_engine.services.confirmation import (
     AlwaysOnGate,
     ConfirmationGate,
@@ -232,6 +234,28 @@ async def cmd_backtest(args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_backfill(args: argparse.Namespace) -> int:
+    """Pull OHLCV history from the provider into the repo (and cache as a side-effect)."""
+    from datetime import date as _date
+
+    cfg = load_app_config()
+    providers = _make_providers(args.provider, cfg)
+    repo = _make_repo(args.repo, cfg)
+    symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+    start = datetime.combine(_date.fromisoformat(args.start), datetime.min.time(), tzinfo=UTC)
+    end = datetime.combine(_date.fromisoformat(args.end), datetime.min.time(), tzinfo=UTC)
+    tf = Timeframe(args.timeframe)
+
+    result = await backfill_universe(
+        providers[0], repo, symbols, tf, start, end, concurrency=args.concurrency
+    )
+    for sym, series in sorted(result.items()):
+        print(f"  {sym:<6} {tf.value:<4} {len(series.candles):>5} candles")
+    total = sum(len(s.candles) for s in result.values())
+    print(f"\nBackfilled {len(result)} symbol(s), {total} candles total.")
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
@@ -262,6 +286,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--interval", type=int, default=300, help="seconds between ticks")
     p_run.add_argument("--iterations", type=int, default=None, help="cap loop iterations (for tests)")
 
+    p_bf = sub.add_parser("backfill", help="pull OHLCV history from provider into repo")
+    _add_common(p_bf)
+    p_bf.add_argument("--symbols", required=True, help="comma-separated symbols")
+    p_bf.add_argument("--start", required=True, help="ISO date (YYYY-MM-DD)")
+    p_bf.add_argument("--end", required=True, help="ISO date (YYYY-MM-DD)")
+    p_bf.add_argument("--timeframe", default="1d", help="1m/5m/15m/1h/1d (default 1d)")
+    p_bf.add_argument("--concurrency", type=int, default=8)
+
     p_bt = sub.add_parser("backtest", help="replay historical bars through the pipeline")
     p_bt.add_argument("--symbols", required=True, help="comma-separated symbols, e.g. GS,WMT,SPY")
     p_bt.add_argument("--start", required=True, help="ISO date (YYYY-MM-DD)")
@@ -283,6 +315,7 @@ def main(argv: list[str] | None = None) -> int:
         "confirm": cmd_confirm,
         "run": cmd_run,
         "backtest": cmd_backtest,
+        "backfill": cmd_backfill,
     }[args.cmd](args)
     return asyncio.run(coro)
 
