@@ -23,7 +23,11 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from trading_engine.alerts.formatter import dedupe_key, format_signal
+from trading_engine.alerts.formatter import (
+    coalesce_signals,
+    coalesced_dedupe_key,
+    format_signal,
+)
 from trading_engine.core.config import Settings, Universe
 from trading_engine.core.interfaces import (
     AlertSink,
@@ -43,7 +47,7 @@ from trading_engine.core.types import (
     Timeframe,
 )
 from trading_engine.features.sector_rank import rank_sectors
-from trading_engine.risk.contract_selector import select_contract
+from trading_engine.risk.contract_selector import select_contract_with_diagnostics
 from trading_engine.risk.trade_management import build_target_plan, classify_risk
 from trading_engine.scanners.market_regime import (
     RegimeInputs,
@@ -273,7 +277,7 @@ class SignalService:
         cfg = self.settings
         risk_class = classify_risk(signal.confidence, day_trade=day_trade)
         chain = await self.options_data.get_option_chain(signal.symbol)
-        contract = select_contract(
+        contract, diag = select_contract_with_diagnostics(
             chain,
             direction=signal.direction,
             as_of=signal.timestamp.date(),
@@ -282,7 +286,31 @@ class SignalService:
             risk_class=risk_class,
             day_trade=day_trade,
         )
-        final = signal.model_copy(update={"contract": contract, "risk_class": risk_class})
+        log.info(
+            "contract_select symbol=%s chain=%d type_ok=%d dte_ok=%d "
+            "liq_ok=%d delta_ok=%d picked=%s rejects=%s",
+            signal.symbol,
+            diag.chain_size,
+            diag.after_type,
+            diag.after_dte,
+            diag.after_liquidity,
+            diag.after_delta,
+            "yes" if contract is not None else "no",
+            dict(diag.rejection_reasons),
+        )
+        # When nothing was picked, stash a short diagnostic on the signal so
+        # the operator can see the "why" in the alert / DB row instead of just
+        # the generic "Awaiting chain — no liquid contract found" footer.
+        extra_codes: list[str] = []
+        if contract is None:
+            extra_codes.append(f"contract_unavailable: {diag.short_reason()}")
+        final = signal.model_copy(
+            update={
+                "contract": contract,
+                "risk_class": risk_class,
+                "reason_codes": [*signal.reason_codes, *extra_codes],
+            }
+        )
         await self.repo.save_signal(final)
         return final
 
@@ -300,6 +328,7 @@ class SignalService:
         """
         alerted: list[Signal] = []
         now = now or datetime.now(tz=UTC)
+        triggered_signals: list[Signal] = []
         for signal in await self.repo.open_signals():
             if signal.status is not SignalStatus.PENDING:
                 continue
@@ -324,10 +353,16 @@ class SignalService:
                     event_payload={"trigger": triggered.trigger_price},
                 )
             )
+            triggered_signals.append(triggered)
+
+        # Coalesce concurrent setups on the same (ticker, bias, bar) so the
+        # operator sees a single alert with companion signals listed.
+        for primary, companions in coalesce_signals(triggered_signals):
             await self.alerts.send(
-                format_signal(triggered), dedupe_key=dedupe_key(triggered)
+                format_signal(primary, companions=companions),
+                dedupe_key=coalesced_dedupe_key(primary, companions),
             )
-            alerted.append(triggered)
+            alerted.append(primary)
         return alerted
 
     # ------------------------------------------------------------------

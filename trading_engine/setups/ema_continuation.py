@@ -57,6 +57,11 @@ class EmaContinuation:
                     rationale=f"{ctx.symbol} pulled back to the 8 EMA ({ema8:.2f}) and is resuming.",
                     setup_quality=0.65,
                     reason_codes=["Pullback to 8 EMA in uptrend", *trend.reason_codes[:1]],
+                    confidence_components={
+                        "trend_score": float(trend.score),
+                        "ema_stack": float(ema8 - ema50),
+                        "distance_to_ema_atr": float(abs(close - ema8) / atr),
+                    },
                 )
             ]
 
@@ -80,6 +85,11 @@ class EmaContinuation:
                     rationale=f"{ctx.symbol} bounced to the 8 EMA ({ema8:.2f}) in a downtrend.",
                     setup_quality=0.6,
                     reason_codes=["Pullback to 8 EMA in downtrend", *trend.reason_codes[:1]],
+                    confidence_components={
+                        "trend_score": float(trend.score),
+                        "ema_stack": float(ema8 - ema50),
+                        "distance_to_ema_atr": float(abs(close - ema8) / atr),
+                    },
                 )
             ]
         return []

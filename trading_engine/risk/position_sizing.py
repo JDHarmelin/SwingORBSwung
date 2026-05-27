@@ -33,7 +33,20 @@ def suggest_size(
     a rough proxy when the caller hasn't priced the option.
     """
     notes: list[str] = []
-    budget = max(0.0, account_size_usd * risk_per_trade_pct / 100.0)
+    # Prefer the per-setup numeric risk profile when present — stop distance
+    # varies by orders of magnitude across setups so a $-cap per setup-class
+    # is more honest than a flat % of account.
+    profile = getattr(signal, "risk_profile", None) or {}
+    profile_budget = profile.get("max_loss_dollars") if isinstance(profile, dict) else None
+    if profile_budget is not None:
+        budget = max(0.0, float(profile_budget))
+        notes.append(
+            f"risk_profile: ${budget:.0f} cap, "
+            f"stop_dist={float(profile.get('stop_distance', 0.0)):.2f} "
+            f"({profile.get('setup_class', '?')})"
+        )
+    else:
+        budget = max(0.0, account_size_usd * risk_per_trade_pct / 100.0)
     direction = signal.direction
     if contract is None:
         notes.append("no contract — sizing is indicative only")

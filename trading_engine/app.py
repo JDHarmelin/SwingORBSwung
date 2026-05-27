@@ -44,10 +44,19 @@ from trading_engine.data.polygon import (
     PolygonMarketDataProvider,
     PolygonOptionsDataProvider,
 )
+from trading_engine.core.types import Timeframe
+from trading_engine.services.backfill import backfill_universe
 from trading_engine.services.confirmation import (
     AlwaysOnGate,
     ConfirmationGate,
     PriceCrossConfirmationGate,
+)
+from trading_engine.services.backtest import (
+    Backtester,
+    format_summary,
+    load_history_from_cache,
+    summarize,
+    write_csv,
 )
 from trading_engine.services.management_service import ManagementService
 from trading_engine.services.scheduler import run_loop, run_tick
@@ -191,6 +200,62 @@ async def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_backtest(args: argparse.Namespace) -> int:
+    """Replay historical bars through the production pipeline; record outcomes."""
+    from datetime import date as _date
+    from pathlib import Path
+
+    cfg = load_app_config()
+    symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+    start = _date.fromisoformat(args.start)
+    end = _date.fromisoformat(args.end)
+
+    history = load_history_from_cache(symbols)
+    missing = [s for s in symbols if s not in history]
+    if missing:
+        log.warning("backtest: no cached history for %s", missing)
+    if not history:
+        print("No cached history for requested symbols — aborting.")
+        return 1
+
+    universe = cfg.universe.model_copy(update={"symbols": list(history.keys())})
+    bt = Backtester(
+        settings=cfg.settings,
+        universe=universe,
+        history=history,
+        horizon_bars=args.horizon,
+    )
+    outcomes = await bt.run(symbols=list(history.keys()), start=start, end=end)
+    summary = summarize(outcomes)
+    out_path = Path(args.out) if args.out else Path("outputs") / f"backtest_{summary.run_id}.csv"
+    write_csv(outcomes, out_path)
+    print(format_summary(summary))
+    print(f"\nWrote {len(outcomes)} rows -> {out_path}")
+    return 0
+
+
+async def cmd_backfill(args: argparse.Namespace) -> int:
+    """Pull OHLCV history from the provider into the repo (and cache as a side-effect)."""
+    from datetime import date as _date
+
+    cfg = load_app_config()
+    providers = _make_providers(args.provider, cfg)
+    repo = _make_repo(args.repo, cfg)
+    symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+    start = datetime.combine(_date.fromisoformat(args.start), datetime.min.time(), tzinfo=UTC)
+    end = datetime.combine(_date.fromisoformat(args.end), datetime.min.time(), tzinfo=UTC)
+    tf = Timeframe(args.timeframe)
+
+    result = await backfill_universe(
+        providers[0], repo, symbols, tf, start, end, concurrency=args.concurrency
+    )
+    for sym, series in sorted(result.items()):
+        print(f"  {sym:<6} {tf.value:<4} {len(series.candles):>5} candles")
+    total = sum(len(s.candles) for s in result.values())
+    print(f"\nBackfilled {len(result)} symbol(s), {total} candles total.")
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
@@ -221,6 +286,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--interval", type=int, default=300, help="seconds between ticks")
     p_run.add_argument("--iterations", type=int, default=None, help="cap loop iterations (for tests)")
 
+    p_bf = sub.add_parser("backfill", help="pull OHLCV history from provider into repo")
+    _add_common(p_bf)
+    p_bf.add_argument("--symbols", required=True, help="comma-separated symbols")
+    p_bf.add_argument("--start", required=True, help="ISO date (YYYY-MM-DD)")
+    p_bf.add_argument("--end", required=True, help="ISO date (YYYY-MM-DD)")
+    p_bf.add_argument("--timeframe", default="1d", help="1m/5m/15m/1h/1d (default 1d)")
+    p_bf.add_argument("--concurrency", type=int, default=8)
+
+    p_bt = sub.add_parser("backtest", help="replay historical bars through the pipeline")
+    p_bt.add_argument("--symbols", required=True, help="comma-separated symbols, e.g. GS,WMT,SPY")
+    p_bt.add_argument("--start", required=True, help="ISO date (YYYY-MM-DD)")
+    p_bt.add_argument("--end", required=True, help="ISO date (YYYY-MM-DD)")
+    p_bt.add_argument("--horizon", type=int, default=5, help="forward bars to score outcomes (default 5)")
+    p_bt.add_argument("--out", default=None, help="output CSV path (default outputs/backtest_<run_id>.csv)")
+
     return parser
 
 
@@ -234,6 +314,8 @@ def main(argv: list[str] | None = None) -> int:
         "scan-once": cmd_scan_once,
         "confirm": cmd_confirm,
         "run": cmd_run,
+        "backtest": cmd_backtest,
+        "backfill": cmd_backfill,
     }[args.cmd](args)
     return asyncio.run(coro)
 

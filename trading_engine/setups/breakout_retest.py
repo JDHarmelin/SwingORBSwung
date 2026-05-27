@@ -60,6 +60,11 @@ class BreakoutRetest:
                 rationale=f"{ctx.symbol} retested {level:.2f} and reclaimed — breakout holding.",
                 setup_quality=0.7,
                 reason_codes=["Prior breakout retested and reclaimed", *trend.reason_codes[:1]],
+                confidence_components={
+                    "trend_score": float(trend.score),
+                    "reclaim_distance_atr": float((close - level) / atr),
+                    "retest_confirmed": 1.0,
+                },
             )
         ]
 

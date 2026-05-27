@@ -286,6 +286,12 @@ class Signal(_Base):
     status: SignalStatus = SignalStatus.PENDING
     risk_class: RiskClass = RiskClass.STANDARD
     reason_codes: list[str] = Field(default_factory=list)
+    confidence_components: dict[str, float] = Field(default_factory=dict)
+    # Numeric, per-setup risk profile derived from entry/stop at build time.
+    # Additive — `risk_class` (string tag) stays for backwards compatibility.
+    # Keys: stop_distance, stop_distance_pct, risk_per_share, max_loss_dollars,
+    #       shares_at_max_loss, setup_class.
+    risk_profile: dict[str, float | str] = Field(default_factory=dict)
 
 
 class SignalEvent(_Base):

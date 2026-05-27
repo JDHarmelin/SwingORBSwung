@@ -63,6 +63,13 @@ class CompressionBreak:
                     rationale=f"{ctx.symbol} broke out of compression (ATR ratio {ratio:.2f}).",
                     setup_quality=min(1.0, (1.0 - ratio) + vol.score * 0.3),
                     reason_codes=["Compression break + volume", *vol.reason_codes[:1]],
+                    confidence_components={
+                        "compression_ratio": float(ratio),
+                        "compression_tightness": float(1.0 - ratio),
+                        "volume_score": float(vol.score),
+                        "relative_volume": float(vol.relative_volume),
+                        "trendline_break": 1.0 if (tb is not None and tb.direction == "up") else 0.0,
+                    },
                 )
             ]
 
@@ -80,6 +87,13 @@ class CompressionBreak:
                     rationale=f"{ctx.symbol} broke down out of compression (ATR ratio {ratio:.2f}).",
                     setup_quality=min(1.0, (1.0 - ratio) + vol.score * 0.3),
                     reason_codes=["Compression breakdown + volume", *vol.reason_codes[:1]],
+                    confidence_components={
+                        "compression_ratio": float(ratio),
+                        "compression_tightness": float(1.0 - ratio),
+                        "volume_score": float(vol.score),
+                        "relative_volume": float(vol.relative_volume),
+                        "trendline_break": 1.0,
+                    },
                 )
             ]
         return []

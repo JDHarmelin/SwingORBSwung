@@ -34,9 +34,21 @@ def _stop_clause(signal: Signal) -> str:
     return f"{side} {signal.stop_price:.2f}"
 
 
-def _contract_line(c: ContractSuggestion | None) -> str:
+_CONTRACT_REASON_PREFIX = "contract_unavailable:"
+
+
+def _contract_line(
+    c: ContractSuggestion | None, reason_codes: list[str] | None = None
+) -> str:
     if c is None:
-        return "Awaiting chain — no liquid contract found"
+        # Surface the diagnostic stashed by signal_service (if any) so
+        # operators can tell entitlement gaps from liquidity-filter rejection.
+        detail = ""
+        for code in reason_codes or []:
+            if code.startswith(_CONTRACT_REASON_PREFIX):
+                detail = f" — {code[len(_CONTRACT_REASON_PREFIX):].strip()}"
+                break
+        return f"Awaiting chain — no liquid contract found{detail}"
     side = "C" if c.direction == "long_call" else "P"
     delta = f", ~{c.delta:+.2f} delta" if c.delta is not None else ""
     return f"{c.expiry:%Y-%m-%d} {c.strike:g}{side}{delta} ({c.classification})"
@@ -53,25 +65,90 @@ def _targets_line(plan: TargetPlan) -> str:
     return ", ".join(parts)
 
 
-def format_signal(signal: Signal) -> str:
-    """Render the trigger alert (spec §9 format)."""
-    setup = _SETUP_LABELS.get(signal.setup_type.value, signal.setup_type.value)
-    why = "; ".join(signal.reason_codes) or signal.rationale
-    return "\n".join(
-        [
-            f"SETUP: {setup}",
-            f"TICKER: {signal.symbol}",
-            f"BIAS: {_bias(signal.direction)}",
-            f"WHY: {why}",
-            f"ENTRY: {_entry_clause(signal)}",
-            f"STOP: {_stop_clause(signal)}",
-            f"CONTRACT: {_contract_line(signal.contract)}",
-            f"TARGETS: {_targets_line(signal.target_plan)}",
-            f"CONFIDENCE: {int(round(signal.confidence * 100))}/100",
-            f"RISK: {signal.risk_class.value}",
-            f"TS: {signal.timestamp.isoformat()}",
-        ]
+def _risk_profile_line(signal: Signal) -> str | None:
+    """Render the numeric per-setup risk profile, or None if absent."""
+    profile = getattr(signal, "risk_profile", None)
+    if not profile:
+        return None
+    try:
+        stop_dist = float(profile.get("stop_distance", 0.0))
+        cap = float(profile.get("max_loss_dollars", 0.0))
+        shares = int(float(profile.get("shares_at_max_loss", 0)))
+        cls = profile.get("setup_class", signal.risk_class.value)
+    except (TypeError, ValueError):
+        return None
+    return (
+        f"RISK PROFILE: stop_dist={stop_dist:.2f} "
+        f"(${cap:.0f} cap -> {shares} sh, class={cls})"
     )
+
+
+def _setup_label(signal: Signal) -> str:
+    return _SETUP_LABELS.get(signal.setup_type.value, signal.setup_type.value)
+
+
+def format_signal(signal: Signal, companions: list[Signal] | None = None) -> str:
+    """Render the trigger alert (spec §9 format).
+
+    If ``companions`` are supplied, append an ``ALSO:`` line listing other
+    setups that fired on the same (ticker, bias, bar). The primary signal is
+    used for the SETUP/CONFIDENCE/entry/stop fields.
+    """
+    setup = _setup_label(signal)
+    why = "; ".join(signal.reason_codes) or signal.rationale
+    lines = [
+        f"SETUP: {setup}",
+        f"TICKER: {signal.symbol}",
+        f"BIAS: {_bias(signal.direction)}",
+        f"WHY: {why}",
+        f"ENTRY: {_entry_clause(signal)}",
+        f"STOP: {_stop_clause(signal)}",
+        f"CONTRACT: {_contract_line(signal.contract, signal.reason_codes)}",
+        f"TARGETS: {_targets_line(signal.target_plan)}",
+        f"CONFIDENCE: {int(round(signal.confidence * 100))}/100",
+        f"RISK: {signal.risk_class.value}",
+        f"TS: {signal.timestamp.isoformat()}",
+    ]
+    rp_line = _risk_profile_line(signal)
+    if rp_line is not None:
+        lines.insert(-1, rp_line)
+    if companions:
+        also = ", ".join(
+            f"{_setup_label(c)} ({int(round(c.confidence * 100))})" for c in companions
+        )
+        lines.append(f"ALSO: {also}")
+    return "\n".join(lines)
+
+
+def coalesce_signals(signals: list[Signal]) -> list[tuple[Signal, list[Signal]]]:
+    """Group signals by (symbol, direction, timestamp) and pick a primary.
+
+    Within each group the highest-confidence signal becomes the primary; the
+    rest are returned as companions (sorted by confidence desc). Groups with a
+    single signal yield an empty companion list. Group order follows the first
+    appearance of each key in ``signals`` so output is stable.
+    """
+    groups: dict[tuple[str, str, str], list[Signal]] = {}
+    order: list[tuple[str, str, str]] = []
+    for sig in signals:
+        key = (sig.symbol, sig.direction.value, sig.timestamp.isoformat())
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(sig)
+    out: list[tuple[Signal, list[Signal]]] = []
+    for key in order:
+        members = sorted(groups[key], key=lambda s: s.confidence, reverse=True)
+        out.append((members[0], members[1:]))
+    return out
+
+
+def coalesced_dedupe_key(primary: Signal, companions: list[Signal]) -> str:
+    """Dedupe key for a coalesced alert — stable across reruns of the same bar."""
+    if not companions:
+        return dedupe_key(primary)
+    ids = sorted([primary.signal_id, *(c.signal_id for c in companions)])
+    return "signals:" + "|".join(ids)
 
 
 def format_event(event: SignalEvent, signal: Signal) -> str:
@@ -100,4 +177,11 @@ def event_dedupe_key(event: SignalEvent) -> str:
     return f"event:{event.signal_id}:{event.event_type}"
 
 
-__all__ = ["dedupe_key", "event_dedupe_key", "format_event", "format_signal"]
+__all__ = [
+    "coalesce_signals",
+    "coalesced_dedupe_key",
+    "dedupe_key",
+    "event_dedupe_key",
+    "format_event",
+    "format_signal",
+]

@@ -42,6 +42,11 @@ class IndexTactical:
                     rationale=f"{ctx.symbol} broke the opening range high {orange.high:.2f} above VWAP.",
                     setup_quality=0.55,
                     reason_codes=["Opening-range breakout", "Above VWAP", "day_trade"],
+                    confidence_components={
+                        "orb_break_distance": float(close - orange.high),
+                        "above_vwap": 1.0,
+                        "opening_range_width": float(orange.high - orange.low),
+                    },
                 )
             ]
 
@@ -57,6 +62,11 @@ class IndexTactical:
                     rationale=f"{ctx.symbol} broke the opening range low {orange.low:.2f} below VWAP.",
                     setup_quality=0.55,
                     reason_codes=["Opening-range breakdown", "Below VWAP", "day_trade"],
+                    confidence_components={
+                        "orb_break_distance": float(orange.low - close),
+                        "above_vwap": 0.0,
+                        "opening_range_width": float(orange.high - orange.low),
+                    },
                 )
             ]
         return []

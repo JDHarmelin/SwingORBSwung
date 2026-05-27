@@ -63,6 +63,20 @@ class RiskConfig(_Cfg):
     move_stop_to_be_after_trim1: bool
     runner_trail: str
     forced_exit_before_event: bool
+    # Per-setup-class dollar risk caps (additive; absent keys fall back to
+    # DEFAULT_MAX_LOSS_DOLLARS below).
+    max_loss_dollars: dict[str, float] = Field(default_factory=dict)
+
+
+# Sensible defaults when config doesn't provide caps. Keyed by RiskClass.value
+# (string tag) plus common synonyms ("day_trade").
+DEFAULT_MAX_LOSS_DOLLARS: dict[str, float] = {
+    "standard": 200.0,
+    "a_plus": 400.0,
+    "lotto": 100.0,
+    "day_trade": 150.0,
+    "hedge": 150.0,
+}
 
 
 class ContractConfig(_Cfg):

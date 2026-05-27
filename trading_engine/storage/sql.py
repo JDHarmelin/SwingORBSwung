@@ -99,6 +99,8 @@ def _signal_to_row(s: Signal) -> SignalRow:
         status=s.status.value,
         risk_class=s.risk_class.value,
         reason_codes_json=list(s.reason_codes),
+        confidence_components_json=dict(s.confidence_components),
+        risk_profile_json=dict(s.risk_profile),
     )
 
 
@@ -129,6 +131,8 @@ def _row_to_signal(r: SignalRow) -> Signal:
         status=SignalStatus(r.status),
         risk_class=RiskClass(r.risk_class),
         reason_codes=list(r.reason_codes_json or []),
+        confidence_components=dict(r.confidence_components_json or {}),
+        risk_profile=dict(r.risk_profile_json or {}),
     )
 
 
@@ -143,7 +147,54 @@ class SqlRepository:
     def __init__(self, database_url: str, *, echo: bool = False) -> None:
         self._engine: Engine = create_engine(database_url, echo=echo, future=True)
         Base.metadata.create_all(self._engine)
+        self._migrate_signals_confidence_components()
+        self._migrate_signals_risk_profile()
         self._Session: sessionmaker[Session] = sessionmaker(self._engine, expire_on_commit=False)
+
+    def _migrate_signals_confidence_components(self) -> None:
+        """Add ``confidence_components_json`` to pre-existing ``signals`` tables.
+
+        ``create_all`` won't ALTER an existing table, so SQLite DBs created
+        before this column was added need a one-shot patch. No-op when the
+        column is already present or when the dialect rejects the introspect.
+        """
+        from sqlalchemy import inspect, text
+
+        try:
+            inspector = inspect(self._engine)
+            if "signals" not in inspector.get_table_names():
+                return
+            cols = {c["name"] for c in inspector.get_columns("signals")}
+            if "confidence_components_json" in cols:
+                return
+            with self._engine.begin() as conn:
+                conn.execute(
+                    text("ALTER TABLE signals ADD COLUMN confidence_components_json JSON")
+                )
+        except Exception:
+            # Best-effort migration: an unsupported dialect just skips and the
+            # default empty dict path keeps reads working.
+            return
+
+    def _migrate_signals_risk_profile(self) -> None:
+        """Add ``risk_profile_json`` to pre-existing ``signals`` tables.
+
+        Mirrors the confidence_components patch above — ``create_all`` won't
+        ALTER an existing table, so older SQLite DBs need a one-shot patch.
+        """
+        from sqlalchemy import inspect, text
+
+        try:
+            inspector = inspect(self._engine)
+            if "signals" not in inspector.get_table_names():
+                return
+            cols = {c["name"] for c in inspector.get_columns("signals")}
+            if "risk_profile_json" in cols:
+                return
+            with self._engine.begin() as conn:
+                conn.execute(text("ALTER TABLE signals ADD COLUMN risk_profile_json JSON"))
+        except Exception:
+            return
 
     # ------------- helpers -----------------------------------------------
     def _session(self) -> Session:
@@ -358,6 +409,8 @@ class SqlRepository:
                     "timestamp", "symbol", "setup_type", "direction", "trigger_price",
                     "stop_price", "target_plan_json", "contract_json", "rationale",
                     "confidence", "status", "risk_class", "reason_codes_json",
+                    "confidence_components_json",
+                    "risk_profile_json",
                 ):
                     setattr(existing, col, getattr(row, col))
             s.commit()

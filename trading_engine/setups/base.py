@@ -66,6 +66,51 @@ def base_confidence(ctx: SetupContext, setup_quality: float) -> float:
     return round(max(0.0, min(1.0, 0.6 * conviction + 0.4 * quality)), 4)
 
 
+def _max_loss_dollars_for(risk_class: RiskClass) -> float:
+    """Look up the dollar risk cap for ``risk_class``.
+
+    Prefers values from loaded settings YAML when available, falls back to
+    ``DEFAULT_MAX_LOSS_DOLLARS``. Wrapped in a try/except so setup builders
+    never fail just because config isn't loadable in the current process.
+    """
+    from trading_engine.core.config import DEFAULT_MAX_LOSS_DOLLARS
+
+    key = risk_class.value
+    try:
+        from trading_engine.core.config import load_settings
+
+        cfg = load_settings()
+        caps = getattr(cfg.risk, "max_loss_dollars", {}) or {}
+        if key in caps:
+            return float(caps[key])
+    except Exception:
+        pass
+    return float(DEFAULT_MAX_LOSS_DOLLARS.get(key, DEFAULT_MAX_LOSS_DOLLARS["standard"]))
+
+
+def compute_risk_profile(
+    *, trigger_price: float, stop_price: float, risk_class: RiskClass
+) -> dict[str, float | str]:
+    """Build the numeric risk profile dict attached to every Signal.
+
+    Position sizing should consume this rather than the string ``risk_class``
+    tag — stop distance varies by orders of magnitude across setups.
+    """
+    stop_distance = abs(float(trigger_price) - float(stop_price))
+    entry = float(trigger_price) if trigger_price != 0 else 0.0
+    stop_distance_pct = (stop_distance / entry) if entry else 0.0
+    max_loss = _max_loss_dollars_for(risk_class)
+    shares = int(max_loss // stop_distance) if stop_distance > 0 else 0
+    return {
+        "stop_distance": round(stop_distance, 6),
+        "stop_distance_pct": round(stop_distance_pct, 6),
+        "risk_per_share": round(stop_distance, 6),
+        "max_loss_dollars": round(max_loss, 2),
+        "shares_at_max_loss": float(shares),
+        "setup_class": risk_class.value,
+    }
+
+
 def build_signal(
     ctx: SetupContext,
     *,
@@ -77,7 +122,26 @@ def build_signal(
     setup_quality: float,
     reason_codes: list[str],
     risk_class: RiskClass = RiskClass.STANDARD,
+    confidence_components: dict[str, float] | None = None,
 ) -> Signal:
+    confidence = base_confidence(ctx, setup_quality)
+    composite = abs(ctx.symbol_score.composite_score) if ctx.symbol_score else 0.3
+    conviction = min(1.0, 0.5 + composite)
+    quality = max(0.0, min(1.0, setup_quality))
+    # Always expose the two ingredients of base_confidence so calibration has a
+    # consistent floor across setups. Setup-specific factors layer on top.
+    components: dict[str, float] = {
+        "conviction": round(0.6 * conviction, 4),
+        "setup_quality": round(0.4 * quality, 4),
+    }
+    if confidence_components:
+        for k, v in confidence_components.items():
+            components[k] = round(float(v), 4)
+    risk_profile = compute_risk_profile(
+        trigger_price=round(trigger_price, 4),
+        stop_price=round(stop_price, 4),
+        risk_class=risk_class,
+    )
     return Signal(
         signal_id=make_signal_id(ctx.symbol, setup, direction, ctx.as_of, trigger_price),
         timestamp=ctx.as_of,
@@ -89,10 +153,12 @@ def build_signal(
         target_plan=ctx.target_plan,
         contract=None,  # filled by the contract selector downstream
         rationale=rationale,
-        confidence=base_confidence(ctx, setup_quality),
+        confidence=confidence,
         status=SignalStatus.PENDING,
         risk_class=risk_class,
         reason_codes=reason_codes,
+        confidence_components=components,
+        risk_profile=risk_profile,
     )
 
 
@@ -109,5 +175,6 @@ __all__ = [
     "SetupDetector",
     "base_confidence",
     "build_signal",
+    "compute_risk_profile",
     "make_signal_id",
 ]
