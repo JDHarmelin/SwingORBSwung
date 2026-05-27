@@ -65,18 +65,45 @@ class YFinanceOptionsDataProvider:
     through to the next source.
     """
 
-    def __init__(self, *, max_expiries: int = 6):
+    def __init__(
+        self,
+        *,
+        max_expiries: int = 6,
+        max_retries: int = 2,
+        backoff_seconds: float = 1.5,
+        thin_chain_threshold: int = 20,
+    ):
+        # Yahoo aggressively throttles — when throttled it returns a tiny chain
+        # or empties rather than a clear error. Treat a chain below
+        # thin_chain_threshold as "probably throttled" and retry with backoff.
         self._max_expiries = max_expiries
+        self._max_retries = max_retries
+        self._backoff = backoff_seconds
+        self._thin = thin_chain_threshold
 
     async def get_option_chain(
         self, underlying: str, as_of: datetime | None = None
     ) -> OptionChain:
         ts = as_of or datetime.now(tz=UTC)
-        try:
-            contracts = await asyncio.to_thread(self._fetch_sync, underlying)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("yfinance: %s failed: %s", underlying, exc)
-            contracts = []
+        contracts: list[OptionContract] = []
+        for attempt in range(self._max_retries + 1):
+            try:
+                contracts = await asyncio.to_thread(self._fetch_sync, underlying)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "yfinance: %s attempt %d/%d failed: %s",
+                    underlying, attempt + 1, self._max_retries + 1, exc,
+                )
+                contracts = []
+            if len(contracts) >= self._thin:
+                break
+            if attempt < self._max_retries:
+                delay = self._backoff * (2**attempt)
+                log.info(
+                    "yfinance: %s thin chain (%d contracts) — backing off %.1fs",
+                    underlying, len(contracts), delay,
+                )
+                await asyncio.sleep(delay)
         return OptionChain(underlying=underlying, snapshot_at=ts, contracts=contracts)
 
     def _fetch_sync(self, underlying: str) -> list[OptionContract]:
