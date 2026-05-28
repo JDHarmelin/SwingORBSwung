@@ -105,5 +105,28 @@ class InMemoryRepository:
     async def list_signal_events(self, signal_id: str) -> list[SignalEvent]:
         return list(self._events.get(signal_id, []))
 
+    async def all_paper_outcomes(self) -> list[dict]:
+        out: list[dict] = []
+        for sig in self._signals.values():
+            for ev in self._events.get(sig.signal_id, []):
+                if ev.event_type != "paper_outcome":
+                    continue
+                p = ev.event_payload
+                out.append(
+                    {
+                        "signal_id": sig.signal_id,
+                        "symbol": sig.symbol,
+                        "setup_type": sig.setup_type.value,
+                        "direction": sig.direction.value,
+                        "confidence": sig.confidence,
+                        "result": p.get("result"),
+                        "r_multiple": p.get("r_multiple"),
+                        "bars_held": p.get("bars_held"),
+                        "triggered": p.get("triggered"),
+                        "timestamp": ev.event_timestamp,
+                    }
+                )
+        return out
+
 
 __all__ = ["InMemoryRepository"]

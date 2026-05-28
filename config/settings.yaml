@@ -89,6 +89,8 @@ execution:
   candidate_ttl_hours: 24          # PENDING candidates older than this expire
   paper_rr: 2.0                    # target = entry +/- rr * |entry-stop|
   paper_track_bars: 30             # how many forward bars to simulate
+  min_alert_confidence: 0.70       # outbound-alert floor 0-1 (persistence unaffected)
+  max_alerts_per_tick: 5           # cap on Telegram alerts per tick (noise control)
 
 # Logging
 logging:

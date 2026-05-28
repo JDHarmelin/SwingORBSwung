@@ -486,5 +486,35 @@ class SqlRepository:
     async def list_signal_events(self, signal_id: str) -> list[SignalEvent]:
         return await self._run(self._list_events_sync, signal_id)
 
+    def _all_paper_outcomes_sync(self) -> list[dict]:
+        with self._session() as s:
+            rows = s.execute(
+                select(SignalRow, SignalEventRow)
+                .join(SignalEventRow, SignalEventRow.signal_id == SignalRow.signal_id)
+                .where(SignalEventRow.event_type == "paper_outcome")
+                .order_by(SignalEventRow.event_timestamp.asc())
+            ).all()
+        out: list[dict] = []
+        for sig_row, ev_row in rows:
+            p = dict(ev_row.event_payload_json or {})
+            out.append(
+                {
+                    "signal_id": sig_row.signal_id,
+                    "symbol": sig_row.symbol,
+                    "setup_type": sig_row.setup_type,
+                    "direction": sig_row.direction,
+                    "confidence": sig_row.confidence,
+                    "result": p.get("result"),
+                    "r_multiple": p.get("r_multiple"),
+                    "bars_held": p.get("bars_held"),
+                    "triggered": p.get("triggered"),
+                    "timestamp": _aware(ev_row.event_timestamp) or ev_row.event_timestamp,
+                }
+            )
+        return out
+
+    async def all_paper_outcomes(self) -> list[dict]:
+        return await self._run(self._all_paper_outcomes_sync)
+
 
 __all__ = ["SqlRepository"]

@@ -131,6 +131,13 @@ class ExecutionConfig(_Cfg):
     candidate_ttl_hours: int = 24
     paper_rr: float = 2.0
     paper_track_bars: int = 30
+    # Outbound alert gating — keeps Telegram quiet without affecting
+    # persistence / paper tracking. Signals below the floor or beyond the
+    # per-tick cap are still TRIGGERED + tracked; only the alert is suppressed.
+    # ``confidence`` is a 0.0-1.0 float in this codebase, so the floor is too:
+    # 0.70 == the "70%" the spec intends.
+    min_alert_confidence: float = 0.70
+    max_alerts_per_tick: int = 5
 
 
 class LoggingConfig(_Cfg):
