@@ -88,25 +88,55 @@ def _max_loss_dollars_for(risk_class: RiskClass) -> float:
     return float(DEFAULT_MAX_LOSS_DOLLARS.get(key, DEFAULT_MAX_LOSS_DOLLARS["standard"]))
 
 
+# Guardrails against absurd sizing on tight-stop setups. A 5-cent intraday
+# stop would otherwise suggest thousands of shares / >$1M notional for a
+# nominal $200 risk — the risk model only holds if the stop fills exactly,
+# which it won't. Cap by notional and floor the effective stop distance.
+MAX_NOTIONAL_DOLLARS = 25_000.0
+MIN_STOP_DISTANCE_PCT = 0.0025  # 0.25% of entry — below this, slippage dominates
+
+
 def compute_risk_profile(
-    *, trigger_price: float, stop_price: float, risk_class: RiskClass
+    *,
+    trigger_price: float,
+    stop_price: float,
+    risk_class: RiskClass,
+    max_notional_dollars: float = MAX_NOTIONAL_DOLLARS,
+    min_stop_distance_pct: float = MIN_STOP_DISTANCE_PCT,
 ) -> dict[str, float | str]:
     """Build the numeric risk profile dict attached to every Signal.
 
     Position sizing should consume this rather than the string ``risk_class``
-    tag — stop distance varies by orders of magnitude across setups.
+    tag — stop distance varies by orders of magnitude across setups. Sizing is
+    bounded two ways: an effective-stop floor (so a near-zero stop doesn't
+    explode the share count) and a hard notional cap.
     """
-    stop_distance = abs(float(trigger_price) - float(stop_price))
+    raw_stop_distance = abs(float(trigger_price) - float(stop_price))
     entry = float(trigger_price) if trigger_price != 0 else 0.0
-    stop_distance_pct = (stop_distance / entry) if entry else 0.0
+    stop_distance_pct = (raw_stop_distance / entry) if entry else 0.0
     max_loss = _max_loss_dollars_for(risk_class)
-    shares = int(max_loss // stop_distance) if stop_distance > 0 else 0
+
+    # Floor the stop used for sizing so tiny stops can't blow up share count.
+    floor_dist = entry * min_stop_distance_pct if entry else 0.0
+    effective_stop = max(raw_stop_distance, floor_dist)
+    shares = int(max_loss // effective_stop) if effective_stop > 0 else 0
+
+    # Hard notional cap.
+    notional_capped = False
+    if entry > 0 and shares * entry > max_notional_dollars:
+        shares = int(max_notional_dollars // entry)
+        notional_capped = True
+
+    stop_floored = effective_stop > raw_stop_distance
     return {
-        "stop_distance": round(stop_distance, 6),
+        "stop_distance": round(raw_stop_distance, 6),
         "stop_distance_pct": round(stop_distance_pct, 6),
-        "risk_per_share": round(stop_distance, 6),
+        "risk_per_share": round(effective_stop, 6),
         "max_loss_dollars": round(max_loss, 2),
         "shares_at_max_loss": float(shares),
+        "notional_at_max_loss": round(shares * entry, 2),
+        "stop_floored": float(stop_floored),
+        "notional_capped": float(notional_capped),
         "setup_class": risk_class.value,
     }
 
