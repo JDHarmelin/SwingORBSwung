@@ -39,6 +39,7 @@ from trading_engine.data.mock_provider import (
     MockMarketDataProvider,
     MockOptionsDataProvider,
 )
+from trading_engine.data.caching_options import CachingOptionsDataProvider
 from trading_engine.data.chained_options import ChainedOptionsDataProvider
 from trading_engine.data.polygon import (
     PolygonEventsProvider,
@@ -82,12 +83,18 @@ def _make_providers(
         key = cfg.secrets.polygon_api_key
         if not key:
             raise SystemExit("POLYGON_API_KEY must be set for --provider polygon")
-        # Stock Starter has no options entitlement; fall through to yfinance
-        # (free, ~15-min delayed) when Polygon returns an empty chain. If a
-        # paid Polygon options upgrade lands later, it'll win automatically.
-        options = ChainedOptionsDataProvider(
-            [PolygonOptionsDataProvider(key), YFinanceOptionsDataProvider()],
-            names=["polygon", "yfinance"],
+        # Stock Starter has no options entitlement: every Polygon options
+        # snapshot 403s, so yfinance goes FIRST (free, ~15-min delayed) and
+        # Polygon is only tried as a fallback when yfinance returns empty
+        # (rare). This eliminates the per-tick 403 storm while keeping Polygon
+        # as an automatic upgrade path if an options entitlement lands later.
+        # The CachingOptionsDataProvider wrapper dedupes the same symbol's
+        # chain across scan + management within a tick (shared instance).
+        options = CachingOptionsDataProvider(
+            ChainedOptionsDataProvider(
+                [YFinanceOptionsDataProvider(), PolygonOptionsDataProvider(key)],
+                names=["yfinance", "polygon"],
+            )
         )
         return (
             PolygonMarketDataProvider(key),

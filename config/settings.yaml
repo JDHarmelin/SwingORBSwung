@@ -20,9 +20,9 @@ liquidity:
       min_option_volume: 100
       max_option_bid_ask_spread_pct: 8.0
     day_trade:
-      min_option_open_interest: 200
-      min_option_volume: 250
-      max_option_bid_ask_spread_pct: 10.0
+      min_option_open_interest: 50    # 0-DTE index weeklies run thin OI
+      min_option_volume: 50
+      max_option_bid_ask_spread_pct: 12.0
     lotto:
       min_option_open_interest: 100
       min_option_volume: 50
@@ -63,7 +63,7 @@ contract:
   swing_dte_min: 14
   swing_dte_max: 45
   day_dte_min: 0
-  day_dte_max: 7
+  day_dte_max: 9
   delta_target_min: 0.30
   delta_target_max: 0.45
   lotto_delta_max: 0.20            # lotto alerts use lower-delta wings

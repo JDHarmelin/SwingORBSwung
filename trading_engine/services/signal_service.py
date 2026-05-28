@@ -71,6 +71,17 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
+def liquidity_key(risk_class_value: str, *, day_trade: bool) -> str:
+    """Resolve the liquidity-override key.
+
+    Index-tactical day-trades classify as ``risk_class=STANDARD`` but need the
+    looser ``day_trade`` option floor (short-dated weeklies have thin OI/vol).
+    The day_trade flag therefore takes priority over the risk class so the
+    override actually applies instead of silently falling back to STANDARD.
+    """
+    return "day_trade" if day_trade else risk_class_value
+
+
 @dataclass
 class PipelineResult:
     as_of: datetime
@@ -282,7 +293,9 @@ class SignalService:
             direction=signal.direction,
             as_of=signal.timestamp.date(),
             contract_cfg=cfg.contract,
-            liquidity=cfg.liquidity.for_risk_class(risk_class.value),
+            liquidity=cfg.liquidity.for_risk_class(
+                liquidity_key(risk_class.value, day_trade=day_trade)
+            ),
             risk_class=risk_class,
             day_trade=day_trade,
         )
