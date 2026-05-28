@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import random
 from datetime import UTC, date, datetime
 
 from trading_engine.core.types import OptionChain, OptionContract, OptionType
@@ -98,7 +99,9 @@ class YFinanceOptionsDataProvider:
             if len(contracts) >= self._thin:
                 break
             if attempt < self._max_retries:
-                delay = self._backoff * (2**attempt)
+                # Jitter so parallel/repeated retries don't synchronize and
+                # hammer Yahoo at the same instant (worse at the open).
+                delay = self._backoff * (2**attempt) * (1 + random.uniform(0, 0.25))
                 log.info(
                     "yfinance: %s thin chain (%d contracts) — backing off %.1fs",
                     underlying, len(contracts), delay,
