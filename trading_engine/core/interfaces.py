@@ -115,6 +115,13 @@ class Repository(Protocol):
 
     async def list_signal_events(self, signal_id: str) -> list[SignalEvent]: ...
 
+    # paper outcomes (P&L reporting)
+    async def all_paper_outcomes(self) -> list[dict]:
+        """One dict per resolved signal that has a ``paper_outcome`` event:
+        ``{signal_id, symbol, setup_type, direction, confidence, result,
+        r_multiple, bars_held, triggered, timestamp}``."""
+        ...
+
 
 __all__ = [
     "AlertSink",

@@ -75,11 +75,21 @@ def _risk_profile_line(signal: Signal) -> str | None:
         cap = float(profile.get("max_loss_dollars", 0.0))
         shares = int(float(profile.get("shares_at_max_loss", 0)))
         cls = profile.get("setup_class", signal.risk_class.value)
+        notional = float(profile.get("notional_at_max_loss", 0.0))
+        floored = bool(float(profile.get("stop_floored", 0.0)))
+        capped = bool(float(profile.get("notional_capped", 0.0)))
     except (TypeError, ValueError):
         return None
+    flags = []
+    if floored:
+        flags.append("stop floored")
+    if capped:
+        flags.append("notional capped")
+    flag_str = f" [{', '.join(flags)}]" if flags else ""
+    notional_str = f", ~${notional:,.0f} notional" if notional else ""
     return (
         f"RISK PROFILE: stop_dist={stop_dist:.2f} "
-        f"(${cap:.0f} cap -> {shares} sh, class={cls})"
+        f"(${cap:.0f} cap -> {shares} sh{notional_str}, class={cls}){flag_str}"
     )
 
 

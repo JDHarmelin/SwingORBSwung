@@ -357,7 +357,27 @@ class SignalService:
 
         # Coalesce concurrent setups on the same (ticker, bias, bar) so the
         # operator sees a single alert with companion signals listed.
-        for primary, companions in coalesce_signals(triggered_signals):
+        pairs = list(coalesce_signals(triggered_signals))
+
+        # Outbound-alert gating (noise control). Signals are already TRIGGERED
+        # + persisted above so paper tracking keeps working — the floor/cap only
+        # decides what actually goes out over the wire.
+        exec_cfg = getattr(self.settings, "execution", None)
+        floor = getattr(exec_cfg, "min_alert_confidence", 0.70)
+        cap = getattr(exec_cfg, "max_alerts_per_tick", 5)
+        passed_floor = [p for p in pairs if p[0].confidence >= floor]
+        passed_floor.sort(key=lambda pc: pc[0].confidence, reverse=True)
+        to_send = passed_floor[:cap]
+        log.info(
+            "alert_gate: triggered=%d passed_floor=%d sent=%d (floor=%.2f cap=%d)",
+            len(triggered_signals),
+            len(passed_floor),
+            len(to_send),
+            floor,
+            cap,
+        )
+
+        for primary, companions in to_send:
             await self.alerts.send(
                 format_signal(primary, companions=companions),
                 dedupe_key=coalesced_dedupe_key(primary, companions),

@@ -10,6 +10,7 @@ from trading_engine.alerts.sinks import InMemoryAlertSink
 from trading_engine.core.config import (
     AlertsConfig,
     ContractConfig,
+    ExecutionConfig,
     FactorWeights,
     LiquidityConfig,
     LoggingConfig,
@@ -65,6 +66,10 @@ def _settings() -> Settings:
         ),
         storage=StorageConfig(),
         alerts=AlertsConfig(),
+        # Disable the outbound-alert floor so this e2e test exercises the gate/
+        # confirmation path itself (the floor + cap are covered in
+        # test_alert_gate.py).
+        execution=ExecutionConfig(min_alert_confidence=0.0),
         logging=LoggingConfig(),
     )
 

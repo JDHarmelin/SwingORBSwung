@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 
 from trading_engine.services.confirmation import ConfirmationGate
 from trading_engine.services.management_service import ManagementService
+from trading_engine.services.market_hours import is_us_market_open
 from trading_engine.services.signal_service import SignalService
 
 log = logging.getLogger(__name__)
@@ -34,15 +35,27 @@ async def run_tick(
     gate: ConfirmationGate,
     *,
     as_of: datetime | None = None,
+    market_hours_only: bool = False,
 ) -> TickResult:
-    """One iteration of the execution-only flow."""
+    """One iteration of the execution-only flow.
+
+    When ``market_hours_only`` is set and the US market is closed at ``when``,
+    the scan + alert steps are skipped (no firing on stale prices) but expiry,
+    outcome tracking, and management still run so the learning log and open
+    positions stay current after hours.
+    """
     when = as_of or datetime.now(tz=UTC)
     result = TickResult()
     result.expired = await signal_service.expire_stale_candidates()
-    pipeline = await signal_service.run_pipeline(when)
-    result.candidates_generated = len(pipeline.candidates)
-    alerted = await signal_service.confirm_and_alert(gate)
-    result.alerted = len(alerted)
+    if market_hours_only and not is_us_market_open(when):
+        log.info("tick: market closed — skipping scan/alert")
+        result.candidates_generated = 0
+        result.alerted = 0
+    else:
+        pipeline = await signal_service.run_pipeline(when)
+        result.candidates_generated = len(pipeline.candidates)
+        alerted = await signal_service.confirm_and_alert(gate)
+        result.alerted = len(alerted)
     result.outcomes_recorded = await signal_service.track_outcomes(when)
     mgmt_events = await management_service.tick(when)
     result.mgmt_events = len(mgmt_events)
@@ -64,11 +77,17 @@ async def run_loop(
     *,
     interval_seconds: int = 300,
     iterations: int | None = None,
+    market_hours_only: bool = False,
 ) -> None:
     """Loop ``run_tick`` indefinitely (or for ``iterations`` for tests)."""
     i = 0
     while iterations is None or i < iterations:
-        await run_tick(signal_service, management_service, gate)
+        await run_tick(
+            signal_service,
+            management_service,
+            gate,
+            market_hours_only=market_hours_only,
+        )
         i += 1
         if iterations is not None and i >= iterations:
             break

@@ -196,8 +196,9 @@ async def cmd_confirm(args: argparse.Namespace) -> int:
 
 async def cmd_run(args: argparse.Namespace) -> int:
     signal_service, mgmt, gate, _sink = _build_service(args)
+    market_hours_only = getattr(args, "market_hours_only", False)
     if args.iterations is not None and args.iterations <= 1:
-        await run_tick(signal_service, mgmt, gate)
+        await run_tick(signal_service, mgmt, gate, market_hours_only=market_hours_only)
         return 0
     await run_loop(
         signal_service,
@@ -205,8 +206,65 @@ async def cmd_run(args: argparse.Namespace) -> int:
         gate,
         interval_seconds=args.interval,
         iterations=args.iterations,
+        market_hours_only=market_hours_only,
     )
     return 0
+
+
+async def cmd_wallet(args: argparse.Namespace) -> int:
+    """Read-only paper-wallet P&L summary from recorded paper_outcome events."""
+    cfg = load_app_config()
+    repo = _make_repo(args.repo, cfg)
+    outcomes = await repo.all_paper_outcomes()
+    print(render_wallet(outcomes, cfg, starting_balance=args.starting_balance))
+    return 0
+
+
+def render_wallet(
+    outcomes: list[dict], cfg: AppConfig, *, starting_balance: float = 10_000.0
+) -> str:
+    """Build the wallet P&L report string. Pure — no I/O — so tests can call it."""
+    risk_per_trade = cfg.settings.risk.max_loss_dollars.get("standard", 200.0)
+
+    total = len(outcomes)
+    triggered = sum(1 for o in outcomes if o.get("triggered"))
+    wins = sum(1 for o in outcomes if o.get("result") == "win")
+    losses = sum(1 for o in outcomes if o.get("result") == "loss")
+    opens = sum(1 for o in outcomes if o.get("result") == "open")
+    resolved = wins + losses
+    win_rate = (wins / resolved * 100.0) if resolved else 0.0
+    total_r = sum(float(o.get("r_multiple") or 0.0) for o in outcomes)
+    total_pnl = total_r * risk_per_trade
+    ending = starting_balance + total_pnl
+
+    lines = [
+        "===== Paper Wallet =====",
+        f"  risk per trade:   ${risk_per_trade:,.2f} (standard)",
+        f"  starting balance: ${starting_balance:,.2f}",
+        f"  total trades:     {total}",
+        f"  triggered:        {triggered}",
+        f"  win/loss/open:    {wins}/{losses}/{opens}",
+        f"  win rate:         {win_rate:.1f}%",
+        f"  total R:          {total_r:+.2f}R",
+        f"  total P&L:        ${total_pnl:,.2f}",
+        f"  ending balance:   ${ending:,.2f}",
+        "  per-setup breakdown:",
+    ]
+
+    setups: dict[str, list[dict]] = {}
+    for o in outcomes:
+        setups.setdefault(o.get("setup_type") or "?", []).append(o)
+    for setup in sorted(setups):
+        rows = setups[setup]
+        s_wins = sum(1 for o in rows if o.get("result") == "win")
+        s_losses = sum(1 for o in rows if o.get("result") == "loss")
+        s_resolved = s_wins + s_losses
+        s_wr = (s_wins / s_resolved * 100.0) if s_resolved else 0.0
+        s_r = sum(float(o.get("r_multiple") or 0.0) for o in rows)
+        lines.append(
+            f"    {setup:<26} trades={len(rows):<3} win_rate={s_wr:5.1f}%  total_R={s_r:+.2f}R"
+        )
+    return "\n".join(lines)
 
 
 async def cmd_backtest(args: argparse.Namespace) -> int:
@@ -294,6 +352,17 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(p_run)
     p_run.add_argument("--interval", type=int, default=300, help="seconds between ticks")
     p_run.add_argument("--iterations", type=int, default=None, help="cap loop iterations (for tests)")
+    p_run.add_argument(
+        "--market-hours-only",
+        action="store_true",
+        help="skip scan/alert when the US market is closed (outcomes still tracked)",
+    )
+
+    p_wallet = sub.add_parser("wallet", help="paper-wallet P&L summary (read-only)")
+    _add_common(p_wallet)
+    p_wallet.add_argument(
+        "--starting-balance", type=float, default=10_000.0, help="starting balance (default 10000)"
+    )
 
     p_bf = sub.add_parser("backfill", help="pull OHLCV history from provider into repo")
     _add_common(p_bf)
@@ -323,6 +392,7 @@ def main(argv: list[str] | None = None) -> int:
         "scan-once": cmd_scan_once,
         "confirm": cmd_confirm,
         "run": cmd_run,
+        "wallet": cmd_wallet,
         "backtest": cmd_backtest,
         "backfill": cmd_backfill,
     }[args.cmd](args)

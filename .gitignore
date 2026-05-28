@@ -35,3 +35,10 @@ htmlcov/
 .vscode/
 .DS_Store
 trading_engine.db*
+
+# Runtime artifacts
+.cache/
+outputs/
+bin/
+*.db
+*.log
