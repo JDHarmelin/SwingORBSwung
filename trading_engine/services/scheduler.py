@@ -47,7 +47,8 @@ async def run_tick(
     when = as_of or datetime.now(tz=UTC)
     result = TickResult()
     result.expired = await signal_service.expire_stale_candidates()
-    if market_hours_only and not is_us_market_open(when):
+    market_closed = market_hours_only and not is_us_market_open(when)
+    if market_closed:
         log.info("tick: market closed — skipping scan/alert")
         result.candidates_generated = 0
         result.alerted = 0
@@ -56,9 +57,17 @@ async def run_tick(
         result.candidates_generated = len(pipeline.candidates)
         alerted = await signal_service.confirm_and_alert(gate)
         result.alerted = len(alerted)
-    result.outcomes_recorded = await signal_service.track_outcomes(when)
-    mgmt_events = await management_service.tick(when)
-    result.mgmt_events = len(mgmt_events)
+    # When the market is closed AND no signal needs advancing, skip the
+    # outcome/management leg — they would otherwise fan out OHLCV + chain
+    # fetches per symbol for zero output.
+    if market_closed and not await signal_service.has_open_work():
+        log.info("tick: market closed + no open work — skipping outcomes/mgmt")
+        result.outcomes_recorded = []
+        result.mgmt_events = 0
+    else:
+        result.outcomes_recorded = await signal_service.track_outcomes(when)
+        mgmt_events = await management_service.tick(when)
+        result.mgmt_events = len(mgmt_events)
     log.info(
         "tick: expired=%d candidates=%d alerted=%d outcomes=%d mgmt=%d",
         len(result.expired),

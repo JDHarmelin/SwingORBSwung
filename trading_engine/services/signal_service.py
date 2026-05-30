@@ -427,6 +427,22 @@ class SignalService:
             expired.append(signal.signal_id)
         return expired
 
+    async def has_open_work(self) -> bool:
+        """True if any signal still needs ticks (PENDING candidate awaiting
+        confirm/expiry, or triggered paper signal awaiting an outcome).
+
+        Lets the scheduler skip the entire track_outcomes + management leg on
+        market-closed ticks when there's nothing to advance — those paths
+        otherwise fan out OHLCV + chain fetches per symbol with no output.
+        """
+        for signal in await self.repo.open_signals():
+            if signal.status is SignalStatus.PENDING:
+                return True
+            events = await self.repo.list_signal_events(signal.signal_id)
+            if not any(e.event_type == "paper_outcome" for e in events):
+                return True
+        return False
+
     async def track_outcomes(
         self, as_of: datetime, *, min_age_minutes: int = 15
     ) -> list[str]:
